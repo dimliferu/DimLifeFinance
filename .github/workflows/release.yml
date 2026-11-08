@@ -48,6 +48,7 @@ jobs:
           VERSION=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)
           test -n "$VERSION"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "apk_name=DimLife-Finance-v${VERSION}.apk" >> "$GITHUB_OUTPUT"
 
       - name: Prepare signing key
         env:
@@ -72,7 +73,7 @@ jobs:
           test -n "$ANDROID_KEY_ALIAS"
           test -n "$ANDROID_KEY_PASSWORD"
           gradle --no-daemon :app:assembleRelease
-          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/DimLife.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/DimLife-Finance-v${{ steps.version.outputs.tag }}.apk"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -81,4 +82,4 @@ jobs:
           target_commitish: main
           name: DimLife Finance ${{ inputs.tag_name || steps.version.outputs.tag }}
           generate_release_notes: true
-          files: ${{ runner.temp }}/DimLife.apk
+          files: ${{ runner.temp }}/${{ steps.version.outputs.apk_name }}
