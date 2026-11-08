@@ -112,8 +112,10 @@ private fun DimLifeApp() {
     val income = transactions.filter { it.type == "INCOME" }.sumOf { it.amountMinor }
     val expenses = transactions.filter { it.type == "EXPENSE" }.sumOf { it.amountMinor }
     val balance = income - expenses
-    val cashBalance = balance - capitalTransfers.filter { it.direction == "OUT" }.sumOf { it.amountMinor } +
-        capitalTransfers.filter { it.direction == "IN" }.sumOf { it.amountMinor }
+    val cashBalanceAsOf = System.currentTimeMillis()
+    val cashBalance = balance -
+        capitalTransfers.filter { it.direction == "OUT" && it.dateMillis <= cashBalanceAsOf }.sumOf { it.amountMinor } +
+        capitalTransfers.filter { it.direction == "IN" && it.dateMillis <= cashBalanceAsOf }.sumOf { it.amountMinor }
 
     val colors = if (darkTheme) darkColorScheme(
         primary = Green, onPrimary = Color(0xFF062010),
