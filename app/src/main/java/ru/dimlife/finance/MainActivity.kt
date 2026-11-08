@@ -1151,7 +1151,7 @@ private fun BackupSection(dao: ru.dimlife.finance.data.FinanceDao) {
     ) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Резервное копирование", fontWeight = FontWeight.SemiBold)
-            Text("Экспортируй операции, подписки и бюджеты в JSON. Файл можно сохранить в облако или перенести на другой телефон.", color = Muted, fontSize = 12.sp)
+            Text("Экспортируй операции, подписки, бюджеты, вклады и биржевой портфель в JSON. Файл можно сохранить или перенести на другой телефон.", color = Muted, fontSize = 12.sp)
             Button(
                 onClick = {
                     scope.launch {
