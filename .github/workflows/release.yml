@@ -81,6 +81,28 @@ jobs:
           gradle --no-daemon :app:assembleRelease
           cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/${{ steps.version.outputs.apk_name }}"
 
+      - name: Remove legacy APK asset from this release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = "${{ steps.version.outputs.tag }}";
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag
+            });
+            const legacy = release.assets.find(asset => asset.name === "DimLife.apk");
+            if (legacy) {
+              await github.rest.repos.deleteReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                asset_id: legacy.id
+              });
+              core.info("Removed legacy DimLife.apk asset");
+            } else {
+              core.info("No legacy APK asset found");
+            }
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
