@@ -1,6 +1,8 @@
 package ru.dimlife.finance
 
 import android.os.Bundle
+import android.Manifest
+import android.content.pm.PackageManager
 import android.app.DatePickerDialog
 import android.content.Context
 import android.content.Intent
@@ -11,6 +13,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -25,6 +28,7 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.work.WorkManager
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.compose.ui.Alignment
@@ -64,6 +68,7 @@ private val DarkSurface = Color(0xFF141D18)
 private val Muted = Color(0xFF9BAAA0)
 private val Context.financeDataStore by preferencesDataStore(name = "dimlife_finance_settings")
 private val DARK_THEME_KEY = booleanPreferencesKey("dark_theme")
+private val PAYMENT_REMINDERS_KEY = booleanPreferencesKey("payment_reminders")
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -353,14 +358,148 @@ private fun OperationsScreen(modifier: Modifier, items: List<FinanceTransaction>
 }
 
 @Composable
+private data class ProjectedPayment(val subscription: Subscription, val dateMillis: Long)
+
+private fun projectPaymentsForMonth(subscriptions: List<Subscription>, monthMillis: Long): List<ProjectedPayment> {
+    val monthStart = Calendar.getInstance().apply {
+        timeInMillis = monthMillis
+        set(Calendar.DAY_OF_MONTH, 1)
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+    val monthEnd = (monthStart.clone() as Calendar).apply {
+        add(Calendar.MONTH, 1)
+        add(Calendar.MILLISECOND, -1)
+    }
+    val result = mutableListOf<ProjectedPayment>()
+    subscriptions.filter { it.isActive }.forEach { subscription ->
+        val due = Calendar.getInstance().apply { timeInMillis = subscription.nextPaymentMillis }
+        var guard = 0
+        fun advance() {
+            when (subscription.period) {
+                "WEEKLY" -> due.add(Calendar.DAY_OF_YEAR, 7)
+                "YEARLY" -> due.add(Calendar.YEAR, 1)
+                else -> due.add(Calendar.MONTH, 1)
+            }
+        }
+        while (due.timeInMillis < monthStart.timeInMillis && guard < 600) {
+            advance()
+            guard++
+        }
+        while (due.timeInMillis <= monthEnd.timeInMillis && guard < 700) {
+            result += ProjectedPayment(subscription, due.timeInMillis)
+            advance()
+            guard++
+        }
+    }
+    return result.sortedBy { it.dateMillis }
+}
+
+@Composable
 private fun SubscriptionsScreen(modifier: Modifier, items: List<Subscription>, onDelete: (Subscription) -> Unit, onEdit: (Subscription) -> Unit) {
+    var selectedDate by remember { mutableLongStateOf(Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+    }.timeInMillis) }
+    val monthCalendar = Calendar.getInstance().apply {
+        timeInMillis = selectedDate
+        set(Calendar.DAY_OF_MONTH, 1)
+    }
+    val monthStart = monthCalendar.timeInMillis
+    val monthPayments = remember(items, monthStart) { projectPaymentsForMonth(items, monthStart) }
+    val dayCount = monthCalendar.getActualMaximum(Calendar.DAY_OF_MONTH)
+    val offset = (monthCalendar.get(Calendar.DAY_OF_WEEK) + 5) % 7
+    val weekCount = (offset + dayCount + 6) / 7
+    val selectedPayments = monthPayments.filter { sameCalendarDay(it.dateMillis, selectedDate) }
+    val monthTitle = SimpleDateFormat("LLLL yyyy", Locale("ru", "RU")).format(Date(monthStart))
+        .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale("ru", "RU")) else it.toString() }
+
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Text("Мои подписки", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Text("Регулярные платежи и даты списаний", color = Muted, fontSize = 12.sp)
+            Text("Календарь платежей", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text("Расписание регулярных списаний и подписок", color = Muted, fontSize = 12.sp)
         }
-        if (items.isEmpty()) item { EmptyState("Подписок пока нет", "Добавь сервисы и регулярные платежи.") }
-        items(items, key = { it.id }) { SubscriptionRow(it, { onEdit(it) }, { onDelete(it) }) }
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(18.dp)) {
+                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = {
+                            val c = Calendar.getInstance().apply { timeInMillis = monthStart; add(Calendar.MONTH, -1) }
+                            selectedDate = c.timeInMillis
+                        }) { Icon(Icons.Outlined.ChevronLeft, "Предыдущий месяц") }
+                        Text(monthTitle, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, fontWeight = FontWeight.SemiBold)
+                        IconButton(onClick = {
+                            val c = Calendar.getInstance().apply { timeInMillis = monthStart; add(Calendar.MONTH, 1) }
+                            selectedDate = c.timeInMillis
+                        }) { Icon(Icons.Outlined.ChevronRight, "Следующий месяц") }
+                    }
+                    Row {
+                        listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс").forEach { day ->
+                            Text(day, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = Muted, fontSize = 11.sp)
+                        }
+                    }
+                    repeat(weekCount) { week ->
+                        Row {
+                            repeat(7) { column ->
+                                val day = week * 7 + column - offset + 1
+                                if (day in 1..dayCount) {
+                                    val dateCalendar = Calendar.getInstance().apply {
+                                        timeInMillis = monthStart
+                                        set(Calendar.DAY_OF_MONTH, day)
+                                    }
+                                    val dayMillis = dateCalendar.timeInMillis
+                                    val count = monthPayments.count { sameCalendarDay(it.dateMillis, dayMillis) }
+                                    val selected = sameCalendarDay(dayMillis, selectedDate)
+                                    Column(
+                                        Modifier.weight(1f).padding(2.dp).height(44.dp)
+                                            .background(
+                                                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                                                else MaterialTheme.colorScheme.background,
+                                                RoundedCornerShape(9.dp)
+                                            )
+                                            .clickable { selectedDate = dayMillis }
+                                            .padding(vertical = 4.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Text(day.toString(), fontSize = 13.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+                                        if (count > 0) Text("• $count", color = Green, fontSize = 9.sp, maxLines = 1)
+                                    }
+                                } else {
+                                    Spacer(Modifier.weight(1f).height(44.dp))
+                                }
+                            }
+                        }
+                    }
+                    Text("Точки показывают дни с запланированными платежами. Нажми на дату, чтобы увидеть списания.", color = Muted, fontSize = 10.sp)
+                }
+            }
+        }
+        item {
+            Text("Платежи на ${date(selectedDate)}", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+        }
+        if (selectedPayments.isEmpty()) {
+            item { Text("На эту дату платежей нет.", color = Muted, fontSize = 12.sp) }
+        } else {
+            items(selectedPayments, key = { "${it.subscription.id}-${it.dateMillis}" }) { payment ->
+                Row(
+                    Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp)).padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(payment.subscription.title, fontWeight = FontWeight.SemiBold)
+                        Text(when (payment.subscription.period) { "WEEKLY" -> "Еженедельный платёж"; "YEARLY" -> "Ежегодный платёж"; else -> "Ежемесячный платёж" }, color = Muted, fontSize = 10.sp)
+                    }
+                    Text(money(payment.subscription.amountMinor), fontWeight = FontWeight.SemiBold, color = Green)
+                }
+            }
+        }
+        item {
+            Text("Все подписки", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        }
+        if (items.isEmpty()) item { EmptyState("Подписок пока нет", "Добавь сервисы и регулярные платежи — они появятся в календаре.") }
+        items(items, key = { "subscription-${it.id}" }) { SubscriptionRow(it, { onEdit(it) }, { onDelete(it) }) }
         item {
             val monthly = items.sumOf { if (it.period == "YEARLY") it.amountMinor / 12 else if (it.period == "WEEKLY") it.amountMinor * 52 / 12 else it.amountMinor }
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
@@ -371,6 +510,13 @@ private fun SubscriptionsScreen(modifier: Modifier, items: List<Subscription>, o
             }
         }
     }
+}
+
+private fun sameCalendarDay(firstMillis: Long, secondMillis: Long): Boolean {
+    val first = Calendar.getInstance().apply { timeInMillis = firstMillis }
+    val second = Calendar.getInstance().apply { timeInMillis = secondMillis }
+    return first.get(Calendar.YEAR) == second.get(Calendar.YEAR) &&
+        first.get(Calendar.DAY_OF_YEAR) == second.get(Calendar.DAY_OF_YEAR)
 }
 
 @Composable
@@ -500,6 +646,39 @@ private fun SettingsScreen(
     dao: ru.dimlife.finance.data.FinanceDao,
     onThemeChange: (Boolean) -> Unit
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val remindersEnabled by context.financeDataStore.data
+        .map { preferences -> preferences[PAYMENT_REMINDERS_KEY] ?: false }
+        .collectAsStateWithLifecycle(initialValue = false)
+    var reminderMessage by remember { mutableStateOf("Напомним о подписках за сутки до списания. Проверка выполняется ежедневно около 09:00.") }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            scope.launch { context.financeDataStore.edit { it[PAYMENT_REMINDERS_KEY] = true } }
+            scheduleSubscriptionReminders(context)
+            reminderMessage = "Напоминания включены."
+        } else {
+            reminderMessage = "Разрешение на уведомления не выдано. Включи его в настройках Android."
+        }
+    }
+
+    LaunchedEffect(remindersEnabled) {
+        if (remindersEnabled) {
+            if (Build.VERSION.SDK_INT < 33 ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            ) {
+                scheduleSubscriptionReminders(context)
+            } else {
+                reminderMessage = "Разреши уведомления Android, чтобы получать напоминания."
+            }
+        } else {
+            cancelSubscriptionReminders(context)
+        }
+    }
+
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Настройки", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp)).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -509,10 +688,34 @@ private fun SettingsScreen(
             }
             Switch(checked = darkTheme, onCheckedChange = onThemeChange)
         }
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(16.dp)) {
+            Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Напоминания о платежах", fontWeight = FontWeight.SemiBold)
+                    Text("Уведомление за сутки до списания, проверка около 09:00", color = Muted, fontSize = 11.sp)
+                }
+                Switch(checked = remindersEnabled, onCheckedChange = { enabled ->
+                    if (!enabled) {
+                        scope.launch { context.financeDataStore.edit { it[PAYMENT_REMINDERS_KEY] = false } }
+                        cancelSubscriptionReminders(context)
+                        reminderMessage = "Напоминания выключены."
+                    } else if (Build.VERSION.SDK_INT >= 33 &&
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        scope.launch { context.financeDataStore.edit { it[PAYMENT_REMINDERS_KEY] = true } }
+                        scheduleSubscriptionReminders(context)
+                        reminderMessage = "Напоминания включены."
+                    }
+                })
+            }
+            Text(reminderMessage, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp), color = Muted, fontSize = 11.sp)
+        }
         BackupSection(dao)
         UpdateSection()
         EmptyState("Данные хранятся на устройстве", "Финансовая информация не отправляется на сервер и не требует подключения к банку.")
-        Text("DimLife Finance · версия 0.6.0", color = Muted, fontSize = 11.sp)
+        Text("DimLife Finance · версия 0.7.0", color = Muted, fontSize = 11.sp)
     }
 }
 
