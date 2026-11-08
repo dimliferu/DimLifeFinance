@@ -212,6 +212,12 @@ interface FinanceDao {
     @Delete
     suspend fun deleteDeposit(item: Deposit)
 
+    @Transaction
+    suspend fun closeDepositToCash(deposit: Deposit, transfer: CapitalTransfer) {
+        deleteDeposit(deposit)
+        addCapitalTransfer(transfer)
+    }
+
     @Insert
     suspend fun addInvestmentHolding(item: InvestmentHolding)
 
@@ -223,6 +229,12 @@ interface FinanceDao {
 
     @Update
     suspend fun updateInvestmentHolding(item: InvestmentHolding)
+
+    @Transaction
+    suspend fun sellInvestmentToCash(existing: InvestmentHolding, updated: InvestmentHolding?, transfer: CapitalTransfer) {
+        if (updated == null) deleteInvestmentHolding(existing) else updateInvestmentHolding(updated)
+        addCapitalTransfer(transfer)
+    }
 
     @Delete
     suspend fun deleteInvestmentHolding(item: InvestmentHolding)
