@@ -13,8 +13,8 @@ android {
         applicationId = "ru.dimlife.finance"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.6.0" // JSON backup and restore, budgets, filters, saved theme; validated build
+        versionCode = 7
+        versionName = "0.7.0" // Payment calendar and subscription reminders
     }
 
     signingConfigs {
