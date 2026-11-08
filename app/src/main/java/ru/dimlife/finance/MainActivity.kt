@@ -53,6 +53,8 @@ import ru.dimlife.finance.data.CategoryBudget
 import ru.dimlife.finance.data.Deposit
 import ru.dimlife.finance.data.InvestmentHolding
 import ru.dimlife.finance.data.CapitalTransfer
+import ru.dimlife.finance.ads.YandexAppOpenAdManager
+import ru.dimlife.finance.ads.YandexBannerAd
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Calendar
@@ -74,9 +76,18 @@ private val DARK_THEME_KEY = booleanPreferencesKey("dark_theme")
 private val PAYMENT_REMINDERS_KEY = booleanPreferencesKey("payment_reminders")
 
 class MainActivity : ComponentActivity() {
+    private lateinit var yandexAppOpenAdManager: YandexAppOpenAdManager
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        yandexAppOpenAdManager = YandexAppOpenAdManager(application)
+        yandexAppOpenAdManager.start()
         setContent { DimLifeApp() }
+    }
+
+    override fun onDestroy() {
+        if (::yandexAppOpenAdManager.isInitialized) yandexAppOpenAdManager.stop()
+        super.onDestroy()
     }
 }
 
@@ -146,7 +157,9 @@ private fun DimLifeApp() {
                 }
             },
             bottomBar = {
-                NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                Column {
+                    YandexBannerAd()
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                     Tab.entries.forEach { tab ->
                         val icon = when (tab) {
                             Tab.HOME -> Icons.Outlined.Home
@@ -162,6 +175,7 @@ private fun DimLifeApp() {
                             icon = { Icon(icon, contentDescription = tab.label) },
                             label = { Text(tab.label, fontSize = 9.sp, maxLines = 1) }
                         )
+                    }
                     }
                 }
             },
