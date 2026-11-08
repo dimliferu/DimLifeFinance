@@ -14,7 +14,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 9
-        versionName = "0.9.0" // Release rebuild after Kotlin compile fixes
+        versionName = "0.9.0" // Final signed release build with investments and deposits
     }
 
     signingConfigs {
