@@ -200,6 +200,12 @@ interface FinanceDao {
     @Insert
     suspend fun addDeposit(item: Deposit)
 
+    @Transaction
+    suspend fun addDepositWithTransfer(deposit: Deposit, transfer: CapitalTransfer) {
+        addDeposit(deposit)
+        addCapitalTransfer(transfer)
+    }
+
     @Update
     suspend fun updateDeposit(item: Deposit)
 
@@ -208,6 +214,12 @@ interface FinanceDao {
 
     @Insert
     suspend fun addInvestmentHolding(item: InvestmentHolding)
+
+    @Transaction
+    suspend fun addInvestmentWithTransfer(holding: InvestmentHolding, transfer: CapitalTransfer) {
+        addInvestmentHolding(holding)
+        addCapitalTransfer(transfer)
+    }
 
     @Update
     suspend fun updateInvestmentHolding(item: InvestmentHolding)
