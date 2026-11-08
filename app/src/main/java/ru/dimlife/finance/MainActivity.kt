@@ -1,6 +1,7 @@
 package ru.dimlife.finance
 
 import android.os.Bundle
+import android.app.DatePickerDialog
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -38,6 +39,7 @@ import ru.dimlife.finance.data.FinanceTransaction
 import ru.dimlife.finance.data.Subscription
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Calendar
 import java.util.Locale
 import java.io.File
 import java.io.IOException
@@ -74,6 +76,8 @@ private fun DimLifeApp() {
     var darkTheme by remember { mutableStateOf(true) }
     var showTransactionDialog by remember { mutableStateOf(false) }
     var showSubscriptionDialog by remember { mutableStateOf(false) }
+    var editingTransaction by remember { mutableStateOf<FinanceTransaction?>(null) }
+    var editingSubscription by remember { mutableStateOf<Subscription?>(null) }
 
     val income = transactions.filter { it.type == "INCOME" }.sumOf { it.amountMinor }
     val expenses = transactions.filter { it.type == "EXPENSE" }.sumOf { it.amountMinor }
@@ -147,15 +151,19 @@ private fun DimLifeApp() {
                     Modifier.padding(padding), balance, income, expenses, transactions.take(5),
                     subscriptions.take(3),
                     onAdd = { showTransactionDialog = true },
-                    onDelete = { item -> scope.launch { dao.deleteTransaction(item) } }
+                    onDelete = { item -> scope.launch { dao.deleteTransaction(item) } },
+                    onEdit = { editingTransaction = it },
+                    onEditSubscription = { editingSubscription = it }
                 )
                 Tab.OPERATIONS -> OperationsScreen(
                     Modifier.padding(padding), transactions,
-                    onDelete = { item -> scope.launch { dao.deleteTransaction(item) } }
+                    onDelete = { item -> scope.launch { dao.deleteTransaction(item) } },
+                    onEdit = { editingTransaction = it }
                 )
                 Tab.SUBSCRIPTIONS -> SubscriptionsScreen(
                     Modifier.padding(padding), subscriptions,
-                    onDelete = { item -> scope.launch { dao.deleteSubscription(item) } }
+                    onDelete = { item -> scope.launch { dao.deleteSubscription(item) } },
+                    onEdit = { editingSubscription = it }
                 )
                 Tab.ANALYTICS -> AnalyticsScreen(Modifier.padding(padding), income, expenses, transactions)
                 Tab.SETTINGS -> SettingsScreen(Modifier.padding(padding), darkTheme) { darkTheme = it }
@@ -165,17 +173,9 @@ private fun DimLifeApp() {
         if (showTransactionDialog) {
             AddTransactionDialog(
                 onDismiss = { showTransactionDialog = false },
-                onSave = { title, amount, type, category ->
-                    scope.launch {
-                        dao.addTransaction(
-                            FinanceTransaction(
-                                title = title,
-                                amountMinor = (amount * 100).toLong(),
-                                type = type,
-                                category = category
-                            )
-                        )
-                    }
+                initial = null,
+                onSave = { title, amount, type, category, dateMillis ->
+                    scope.launch { dao.addTransaction(FinanceTransaction(title = title, amountMinor = (amount * 100).toLong(), type = type, category = category, dateMillis = dateMillis)) }
                     showTransactionDialog = false
                 }
             )
@@ -183,20 +183,24 @@ private fun DimLifeApp() {
         if (showSubscriptionDialog) {
             AddSubscriptionDialog(
                 onDismiss = { showSubscriptionDialog = false },
-                onSave = { title, amount, period ->
-                    scope.launch {
-                        dao.addSubscription(
-                            Subscription(
-                                title = title,
-                                amountMinor = (amount * 100).toLong(),
-                                period = period,
-                                nextPaymentMillis = System.currentTimeMillis() + if (period == "WEEKLY") 7L * 86400000 else if (period == "YEARLY") 365L * 86400000 else 30L * 86400000
-                            )
-                        )
-                    }
+                initial = null,
+                onSave = { title, amount, period, nextPaymentMillis ->
+                    scope.launch { dao.addSubscription(Subscription(title = title, amountMinor = (amount * 100).toLong(), period = period, nextPaymentMillis = nextPaymentMillis)) }
                     showSubscriptionDialog = false
                 }
             )
+        }
+        editingTransaction?.let { item ->
+            AddTransactionDialog(initial = item, onDismiss = { editingTransaction = null }, onSave = { title, amount, type, category, dateMillis ->
+                scope.launch { dao.updateTransaction(item.copy(title = title, amountMinor = (amount * 100).toLong(), type = type, category = category, dateMillis = dateMillis)) }
+                editingTransaction = null
+            })
+        }
+        editingSubscription?.let { item ->
+            AddSubscriptionDialog(initial = item, onDismiss = { editingSubscription = null }, onSave = { title, amount, period, nextPaymentMillis ->
+                scope.launch { dao.updateSubscription(item.copy(title = title, amountMinor = (amount * 100).toLong(), period = period, nextPaymentMillis = nextPaymentMillis)) }
+                editingSubscription = null
+            })
         }
     }
 }
@@ -205,7 +209,8 @@ private fun DimLifeApp() {
 private fun HomeScreen(
     modifier: Modifier, balance: Long, income: Long, expenses: Long,
     recent: List<FinanceTransaction>, subscriptions: List<Subscription>,
-    onAdd: () -> Unit, onDelete: (FinanceTransaction) -> Unit
+    onAdd: () -> Unit, onDelete: (FinanceTransaction) -> Unit,
+    onEdit: (FinanceTransaction) -> Unit, onEditSubscription: (Subscription) -> Unit
 ) {
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
@@ -224,10 +229,10 @@ private fun HomeScreen(
         }
         item { SectionHeader("Последние операции", "Все операции") }
         if (recent.isEmpty()) item { EmptyState("Пока нет операций", "Нажми +, чтобы добавить первый доход или расход.") }
-        items(recent, key = { it.id }) { TransactionRow(it, onDelete) }
+        items(recent, key = { it.id }) { TransactionRow(it, onEdit, onDelete) }
         item { SectionHeader("Ближайшие подписки", "Все подписки") }
         if (subscriptions.isEmpty()) item { EmptyState("Подписок пока нет", "Добавь регулярные платежи, чтобы не забывать о них.") }
-        items(subscriptions, key = { "sub-${it.id}" }) { SubscriptionRow(it, {}) }
+        items(subscriptions, key = { "sub-${it.id}" }) { SubscriptionRow(it, { onEditSubscription(it) }, {}) }
         item {
             OutlinedButton(onClick = onAdd, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(8.dp)); Text("Добавить операцию")
@@ -262,7 +267,7 @@ private fun EmptyState(title: String, description: String) {
 }
 
 @Composable
-private fun TransactionRow(item: FinanceTransaction, onDelete: (FinanceTransaction) -> Unit) {
+private fun TransactionRow(item: FinanceTransaction, onEdit: (FinanceTransaction) -> Unit, onDelete: (FinanceTransaction) -> Unit) {
     Row(
         Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(15.dp)).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -276,28 +281,29 @@ private fun TransactionRow(item: FinanceTransaction, onDelete: (FinanceTransacti
             Text(item.category + " · " + date(item.dateMillis), color = Muted, fontSize = 11.sp)
         }
         Text((if (item.type == "INCOME") "+" else "−") + money(item.amountMinor), color = if (item.type == "INCOME") Green else Color(0xFFFF9A83), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+        IconButton(onClick = { onEdit(item) }) { Icon(Icons.Outlined.Edit, "Изменить", tint = Green) }
         IconButton(onClick = { onDelete(item) }) { Icon(Icons.Outlined.DeleteOutline, "Удалить", tint = Muted) }
     }
 }
 
 @Composable
-private fun OperationsScreen(modifier: Modifier, items: List<FinanceTransaction>, onDelete: (FinanceTransaction) -> Unit) {
+private fun OperationsScreen(modifier: Modifier, items: List<FinanceTransaction>, onDelete: (FinanceTransaction) -> Unit, onEdit: (FinanceTransaction) -> Unit) {
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Text("Все операции", fontSize = 22.sp, fontWeight = FontWeight.Bold) }
         if (items.isEmpty()) item { EmptyState("История пока пуста", "Добавь доход или расход с помощью кнопки +.") }
-        items(items, key = { it.id }) { TransactionRow(it, onDelete) }
+        items(items, key = { it.id }) { TransactionRow(it, onEdit, onDelete) }
     }
 }
 
 @Composable
-private fun SubscriptionsScreen(modifier: Modifier, items: List<Subscription>, onDelete: (Subscription) -> Unit) {
+private fun SubscriptionsScreen(modifier: Modifier, items: List<Subscription>, onDelete: (Subscription) -> Unit, onEdit: (Subscription) -> Unit) {
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Text("Мои подписки", fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Text("Регулярные платежи и даты списаний", color = Muted, fontSize = 12.sp)
         }
         if (items.isEmpty()) item { EmptyState("Подписок пока нет", "Добавь сервисы и регулярные платежи.") }
-        items(items, key = { it.id }) { SubscriptionRow(it) { onDelete(it) } }
+        items(items, key = { it.id }) { SubscriptionRow(it, { onEdit(it) }, { onDelete(it) }) }
         item {
             val monthly = items.sumOf { if (it.period == "YEARLY") it.amountMinor / 12 else if (it.period == "WEEKLY") it.amountMinor * 52 / 12 else it.amountMinor }
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
@@ -311,7 +317,7 @@ private fun SubscriptionsScreen(modifier: Modifier, items: List<Subscription>, o
 }
 
 @Composable
-private fun SubscriptionRow(item: Subscription, onDelete: () -> Unit) {
+private fun SubscriptionRow(item: Subscription, onEdit: () -> Unit, onDelete: () -> Unit) {
     Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp)).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(42.dp).background(Color(0xFF1D3326), RoundedCornerShape(13.dp)), contentAlignment = Alignment.Center) {
             Icon(Icons.Outlined.Autorenew, null, tint = Green)
@@ -325,6 +331,7 @@ private fun SubscriptionRow(item: Subscription, onDelete: () -> Unit) {
             Text(money(item.amountMinor), fontWeight = FontWeight.SemiBold)
             Text(when (item.period) { "WEEKLY" -> "в неделю"; "YEARLY" -> "в год"; else -> "в месяц" }, color = Muted, fontSize = 10.sp)
         }
+        IconButton(onClick = onEdit) { Icon(Icons.Outlined.Edit, "Изменить", tint = Green) }
         IconButton(onClick = onDelete) { Icon(Icons.Outlined.DeleteOutline, "Удалить", tint = Muted) }
     }
 }
@@ -543,18 +550,26 @@ private fun openApkInstaller(context: Context, apk: File) {
 }
 
 @Composable
-private fun AddTransactionDialog(onDismiss: () -> Unit, onSave: (String, Double, String, String) -> Unit) {
-    var title by remember { mutableStateOf("") }
-    var amount by remember { mutableStateOf("") }
-    var type by remember { mutableStateOf("EXPENSE") }
-    var category by remember { mutableStateOf("Прочее") }
+private fun AddTransactionDialog(initial: FinanceTransaction?, onDismiss: () -> Unit, onSave: (String, Double, String, String, Long) -> Unit) {
+    val context = LocalContext.current
+    var title by remember(initial?.id) { mutableStateOf(initial?.title ?: "") }
+    var amount by remember(initial?.id) { mutableStateOf(initial?.amountMinor?.let { String.format(Locale.US, "%.2f", it / 100.0) } ?: "") }
+    var type by remember(initial?.id) { mutableStateOf(initial?.type ?: "EXPENSE") }
+    var category by remember(initial?.id) { mutableStateOf(initial?.category ?: "Прочее") }
+    var dateMillis by remember(initial?.id) { mutableLongStateOf(initial?.dateMillis ?: System.currentTimeMillis()) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Новая операция") },
+        title = { Text(if (initial == null) "Новая операция" else "Редактировать операцию") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(title, { title = it }, label = { Text("Название") }, singleLine = true)
                 OutlinedTextField(amount, { amount = it }, label = { Text("Сумма, ₽") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+                OutlinedButton(onClick = {
+                    val c = Calendar.getInstance().apply { timeInMillis = dateMillis }
+                    DatePickerDialog(context, { _, year, month, day ->
+                        dateMillis = Calendar.getInstance().apply { set(year, month, day, 12, 0, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis
+                    }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show()
+                }) { Text("Дата: ${date(dateMillis)}") }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     FilterChip(selected = type == "EXPENSE", onClick = { type = "EXPENSE" }, label = { Text("Расход") })
                     Spacer(Modifier.width(8.dp))
@@ -574,7 +589,7 @@ private fun AddTransactionDialog(onDismiss: () -> Unit, onSave: (String, Double,
         confirmButton = {
             TextButton(onClick = {
                 val value = amount.replace(',', '.').toDoubleOrNull()
-                if (title.isNotBlank() && value != null && value > 0) onSave(title.trim(), value, type, category)
+                if (title.isNotBlank() && value != null && value > 0) onSave(title.trim(), value, type, category, dateMillis)
             }) { Text("Сохранить") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
@@ -582,17 +597,25 @@ private fun AddTransactionDialog(onDismiss: () -> Unit, onSave: (String, Double,
 }
 
 @Composable
-private fun AddSubscriptionDialog(onDismiss: () -> Unit, onSave: (String, Double, String) -> Unit) {
-    var title by remember { mutableStateOf("") }
-    var amount by remember { mutableStateOf("") }
-    var period by remember { mutableStateOf("MONTHLY") }
+private fun AddSubscriptionDialog(initial: Subscription?, onDismiss: () -> Unit, onSave: (String, Double, String, Long) -> Unit) {
+    val context = LocalContext.current
+    var title by remember(initial?.id) { mutableStateOf(initial?.title ?: "") }
+    var amount by remember(initial?.id) { mutableStateOf(initial?.amountMinor?.let { String.format(Locale.US, "%.2f", it / 100.0) } ?: "") }
+    var period by remember(initial?.id) { mutableStateOf(initial?.period ?: "MONTHLY") }
+    var nextPaymentMillis by remember(initial?.id) { mutableLongStateOf(initial?.nextPaymentMillis ?: (System.currentTimeMillis() + 30L * 86400000)) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Новая подписка") },
+        title = { Text(if (initial == null) "Новая подписка" else "Редактировать подписку") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(title, { title = it }, label = { Text("Название сервиса") }, singleLine = true)
                 OutlinedTextField(amount, { amount = it }, label = { Text("Стоимость, ₽") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+                OutlinedButton(onClick = {
+                    val c = Calendar.getInstance().apply { timeInMillis = nextPaymentMillis }
+                    DatePickerDialog(context, { _, year, month, day ->
+                        nextPaymentMillis = Calendar.getInstance().apply { set(year, month, day, 12, 0, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis
+                    }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show()
+                }) { Text("Следующий платёж: ${date(nextPaymentMillis)}") }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilterChip(selected = period == "WEEKLY", onClick = { period = "WEEKLY" }, label = { Text("Неделя") })
                     FilterChip(selected = period == "MONTHLY", onClick = { period = "MONTHLY" }, label = { Text("Месяц") })
@@ -603,7 +626,7 @@ private fun AddSubscriptionDialog(onDismiss: () -> Unit, onSave: (String, Double
         confirmButton = {
             TextButton(onClick = {
                 val value = amount.replace(',', '.').toDoubleOrNull()
-                if (title.isNotBlank() && value != null && value > 0) onSave(title.trim(), value, period)
+                if (title.isNotBlank() && value != null && value > 0) onSave(title.trim(), value, period, nextPaymentMillis)
             }) { Text("Сохранить") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
