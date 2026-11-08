@@ -99,7 +99,7 @@ private fun DimLifeApp() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
-                        Text("DimLife", fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                        Text("DimLife Finance", fontSize = 25.sp, fontWeight = FontWeight.Bold)
                         Text("ТВОИ ФИНАНСЫ ПОД КОНТРОЛЕМ", fontSize = 9.sp, color = Muted, letterSpacing = 1.sp)
                     }
                     IconButton(onClick = { selectedTab = Tab.SETTINGS }) {
@@ -361,7 +361,7 @@ private fun SettingsScreen(modifier: Modifier, darkTheme: Boolean, onThemeChange
         }
         UpdateSection()
         EmptyState("Данные хранятся на устройстве", "Регистрация и подключение к банку не требуются. Экспорт и резервное копирование добавим следующим этапом.")
-        Text("DimLife Finance · версия 0.2.0", color = Muted, fontSize = 11.sp)
+        Text("DimLife Finance · версия 0.3.0", color = Muted, fontSize = 11.sp)
     }
 }
 
@@ -377,7 +377,7 @@ private fun UpdateSection() {
     val scope = rememberCoroutineScope()
     val currentVersion = remember {
         @Suppress("DEPRECATION")
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.2.0"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.3.0"
     }
     var latest by remember { mutableStateOf<LatestRelease?>(null) }
     var downloadedApk by remember { mutableStateOf<File?>(null) }
