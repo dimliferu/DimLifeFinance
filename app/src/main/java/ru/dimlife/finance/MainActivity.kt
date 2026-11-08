@@ -192,7 +192,7 @@ private fun DimLifeApp() {
                     onDelete = { item -> scope.launch { dao.deleteSubscription(item) } },
                     onEdit = { editingSubscription = it }
                 )
-                Tab.ANALYTICS -> AnalyticsScreen(Modifier.padding(padding), income, expenses, transactions, budgets,
+                Tab.ANALYTICS -> AnalyticsScreen(Modifier.padding(padding), transactions, budgets,
                     onDeleteBudget = { item -> scope.launch { dao.deleteBudget(item) } }
                 )
                 Tab.SETTINGS -> SettingsScreen(Modifier.padding(padding), darkTheme, dao) { enabled ->
@@ -541,34 +541,147 @@ private fun SubscriptionRow(item: Subscription, onEdit: () -> Unit, onDelete: ()
 @Composable
 private fun AnalyticsScreen(
     modifier: Modifier,
-    income: Long,
-    expenses: Long,
     items: List<FinanceTransaction>,
     budgets: List<CategoryBudget>,
     onDeleteBudget: (CategoryBudget) -> Unit
 ) {
-    val total = (income + expenses).coerceAtLeast(1)
-    val monthRange = remember { currentMonthRange() }
-    val spentByCategory = items.filter { it.type == "EXPENSE" && it.dateMillis in monthRange.first..monthRange.second }
+    var selectedMonth by remember {
+        mutableStateOf(Calendar.getInstance().apply {
+            set(Calendar.DAY_OF_MONTH, 1)
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        })
+    }
+    val selectedRange = remember(selectedMonth.timeInMillis) { monthRangeFor(selectedMonth.timeInMillis) }
+    val monthItems = items.filter { it.dateMillis in selectedRange.first..selectedRange.second }
+    val monthIncome = monthItems.filter { it.type == "INCOME" }.sumOf { it.amountMinor }
+    val monthExpenses = monthItems.filter { it.type == "EXPENSE" }.sumOf { it.amountMinor }
+    val monthBalance = monthIncome - monthExpenses
+    val spentByCategory = monthItems.filter { it.type == "EXPENSE" }
         .groupBy { it.category }.mapValues { (_, rows) -> rows.sumOf { it.amountMinor } }
+        .toList().sortedByDescending { it.second }.take(6)
+    val monthTitle = SimpleDateFormat("LLLL yyyy", Locale("ru", "RU"))
+        .format(Date(selectedMonth.timeInMillis)).replaceFirstChar { it.titlecase(Locale("ru", "RU")) }
+
+    val trend = (-5..0).map { offset ->
+        val month = (selectedMonth.clone() as Calendar).apply { add(Calendar.MONTH, offset) }
+        val range = monthRangeFor(month.timeInMillis)
+        val rows = items.filter { it.dateMillis in range.first..range.second }
+        val label = SimpleDateFormat("LLL", Locale("ru", "RU")).format(Date(month.timeInMillis))
+        Triple(label, rows.filter { it.type == "INCOME" }.sumOf { it.amountMinor },
+            rows.filter { it.type == "EXPENSE" }.sumOf { it.amountMinor })
+    }
+    val trendMax = trend.maxOfOrNull { maxOf(it.second, it.third) }?.coerceAtLeast(1L) ?: 1L
+    val currentRange = remember { currentMonthRange() }
+    val currentSpentByCategory = items.filter {
+        it.type == "EXPENSE" && it.dateMillis in currentRange.first..currentRange.second
+    }.groupBy { it.category }.mapValues { (_, rows) -> rows.sumOf { it.amountMinor } }
+    val currentMonthTitle = SimpleDateFormat("LLLL yyyy", Locale("ru", "RU"))
+        .format(Date()).replaceFirstChar { it.titlecase(Locale("ru", "RU")) }
+
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Аналитика", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-            Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Сводка по всем операциям", color = Muted, fontSize = 12.sp)
-                Text("Доходы: ${money(income)}", color = Green, fontWeight = FontWeight.SemiBold)
-                LinearProgressIndicator(progress = { income.toFloat() / total }, modifier = Modifier.fillMaxWidth(), color = Green)
-                Text("Расходы: ${money(expenses)}", color = Color(0xFFFF9A83), fontWeight = FontWeight.SemiBold)
-                LinearProgressIndicator(progress = { expenses.toFloat() / total }, modifier = Modifier.fillMaxWidth(), color = Color(0xFFFF9A83))
-                Text("Всего операций: ${items.size}", color = Muted, fontSize = 12.sp)
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = {
+                    selectedMonth = (selectedMonth.clone() as Calendar).apply { add(Calendar.MONTH, -1) }
+                }) { Icon(Icons.Outlined.ChevronLeft, "Предыдущий месяц") }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Выбранный период", color = Muted, fontSize = 10.sp)
+                    Text(monthTitle, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                }
+                IconButton(onClick = {
+                    selectedMonth = (selectedMonth.clone() as Calendar).apply { add(Calendar.MONTH, 1) }
+                }) { Icon(Icons.Outlined.ChevronRight, "Следующий месяц") }
             }
         }
-        Text("Бюджеты на ${SimpleDateFormat("LLLL yyyy", Locale("ru", "RU")).format(Date())}", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Итоги за месяц", color = Muted, fontSize = 12.sp)
+                Text(money(monthBalance), fontSize = 27.sp, fontWeight = FontWeight.Bold,
+                    color = if (monthBalance >= 0) Green else Color(0xFFFF9A83))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column {
+                        Text("Доходы", color = Muted, fontSize = 11.sp)
+                        Text(money(monthIncome), color = Green, fontWeight = FontWeight.SemiBold)
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("Расходы", color = Muted, fontSize = 11.sp)
+                        Text(money(monthExpenses), color = Color(0xFFFF9A83), fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                Text("Операций: ${monthItems.size}", color = Muted, fontSize = 11.sp)
+                if (monthItems.isEmpty()) EmptyState("За этот месяц записей нет", "Добавленные доходы и расходы появятся здесь.")
+            }
+        }
+
+        Text("Динамика за 6 месяцев", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(8.dp).background(Green, RoundedCornerShape(4.dp)))
+                        Spacer(Modifier.width(5.dp)); Text("Доходы", fontSize = 10.sp, color = Muted)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(8.dp).background(Color(0xFFFF9A83), RoundedCornerShape(4.dp)))
+                        Spacer(Modifier.width(5.dp)); Text("Расходы", fontSize = 10.sp, color = Muted)
+                    }
+                }
+                trend.forEach { (label, incomeValue, expenseValue) ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(label.replaceFirstChar { it.titlecase(Locale("ru", "RU")) }, fontSize = 11.sp, color = Muted)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Д", fontSize = 9.sp, color = Green, modifier = Modifier.width(14.dp))
+                            LinearProgressIndicator(progress = { incomeValue.toFloat() / trendMax.toFloat() },
+                                modifier = Modifier.weight(1f).height(7.dp), color = Green, trackColor = MaterialTheme.colorScheme.background)
+                            Spacer(Modifier.width(8.dp))
+                            Text(money(incomeValue), fontSize = 10.sp, modifier = Modifier.width(90.dp), maxLines = 1)
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Р", fontSize = 9.sp, color = Color(0xFFFF9A83), modifier = Modifier.width(14.dp))
+                            LinearProgressIndicator(progress = { expenseValue.toFloat() / trendMax.toFloat() },
+                                modifier = Modifier.weight(1f).height(7.dp), color = Color(0xFFFF9A83), trackColor = MaterialTheme.colorScheme.background)
+                            Spacer(Modifier.width(8.dp))
+                            Text(money(expenseValue), fontSize = 10.sp, modifier = Modifier.width(90.dp), maxLines = 1)
+                        }
+                    }
+                }
+            }
+        }
+
+        Text("Расходы по категориям", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        if (spentByCategory.isEmpty()) {
+            EmptyState("Расходов пока нет", "Добавь расход за выбранный месяц — здесь появится разбивка.")
+        } else {
+            val categoryMax = spentByCategory.maxOf { it.second }.coerceAtLeast(1L)
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    spentByCategory.forEach { (category, amount) ->
+                        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(category, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                                Text(money(amount), fontSize = 12.sp, color = Color(0xFFFF9A83))
+                            }
+                            LinearProgressIndicator(progress = { amount.toFloat() / categoryMax.toFloat() },
+                                modifier = Modifier.fillMaxWidth().height(7.dp), color = Color(0xFFFF9A83))
+                        }
+                    }
+                }
+            }
+        }
+
+        Text("Бюджеты на текущий месяц · $currentMonthTitle", fontSize = 17.sp, fontWeight = FontWeight.Bold)
         if (budgets.isEmpty()) {
             EmptyState("Бюджеты не заданы", "Нажми +, чтобы установить месячный лимит для категории расходов.")
         } else {
             budgets.forEach { budget ->
-                val spent = spentByCategory[budget.category] ?: 0L
+                val spent = currentSpentByCategory[budget.category] ?: 0L
                 val progress = (spent.toFloat() / budget.limitMinor.coerceAtLeast(1L)).coerceIn(0f, 1f)
                 val exceeded = spent > budget.limitMinor
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
@@ -591,8 +704,9 @@ private fun AnalyticsScreen(
     }
 }
 
-private fun currentMonthRange(): Pair<Long, Long> {
+private fun monthRangeFor(monthMillis: Long): Pair<Long, Long> {
     val start = Calendar.getInstance().apply {
+        timeInMillis = monthMillis
         set(Calendar.DAY_OF_MONTH, 1)
         set(Calendar.HOUR_OF_DAY, 0)
         set(Calendar.MINUTE, 0)
@@ -605,6 +719,8 @@ private fun currentMonthRange(): Pair<Long, Long> {
     }
     return start.timeInMillis to end.timeInMillis
 }
+
+private fun currentMonthRange(): Pair<Long, Long> = monthRangeFor(System.currentTimeMillis())
 
 @Composable
 private fun AddBudgetDialog(onDismiss: () -> Unit, onSave: (String, Double) -> Unit) {
