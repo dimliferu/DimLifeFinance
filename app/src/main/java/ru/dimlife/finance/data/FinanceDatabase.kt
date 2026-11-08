@@ -174,6 +174,9 @@ interface FinanceDao {
     @Insert
     suspend fun addDeposit(item: Deposit)
 
+    @Update
+    suspend fun updateDeposit(item: Deposit)
+
     @Delete
     suspend fun deleteDeposit(item: Deposit)
 
