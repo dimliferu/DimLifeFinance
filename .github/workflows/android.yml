@@ -55,7 +55,7 @@ jobs:
           retention-days: 14
 
   release:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch'
     name: Build and publish signed release
     needs: build
     runs-on: ubuntu-latest
