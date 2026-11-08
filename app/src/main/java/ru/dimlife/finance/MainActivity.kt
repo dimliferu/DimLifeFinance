@@ -211,7 +211,6 @@ private fun DimLifeApp() {
                     onAddDeposit = { showDepositDialog = true },
                     onAddInvestment = { showInvestmentDialog = true },
                     onAddTransfer = { showCapitalTransferDialog = true },
-                    onDeleteTransfer = { item -> scope.launch { dao.deleteCapitalTransfer(item) } },
                     onCloseDeposit = { deposit ->
                         scope.launch {
                             val returnAmount = deposit.principalMinor + depositInterestMinor(deposit, System.currentTimeMillis())
@@ -690,7 +689,6 @@ private fun CapitalScreen(
     investments: List<InvestmentHolding>, transfers: List<CapitalTransfer>,
     dao: ru.dimlife.finance.data.FinanceDao,
     onAddDeposit: () -> Unit, onAddInvestment: () -> Unit, onAddTransfer: () -> Unit,
-    onDeleteTransfer: (CapitalTransfer) -> Unit,
     onCloseDeposit: (Deposit) -> Unit,
     onSellInvestment: (InvestmentHolding, Double) -> Unit
 ) {
@@ -804,7 +802,6 @@ private fun CapitalScreen(
                     Text("${transfer.assetType} · ${date(transfer.dateMillis)}${if (transfer.note.isNotBlank()) " · ${transfer.note}" else ""}", color = Muted, fontSize = 10.sp)
                 }
                 Text((if (transfer.direction == "OUT") "−" else "+") + money(transfer.amountMinor), color = if (transfer.direction == "OUT") Color(0xFFFF9A83) else Green, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-                IconButton(onClick = { onDeleteTransfer(transfer) }) { Icon(Icons.Outlined.DeleteOutline, "Удалить перемещение", tint = Muted) }
             }
         }
         Text("Перемещение меняет остаток наличных, но не является доходом или расходом.", color = Muted, fontSize = 10.sp)
