@@ -45,7 +45,7 @@ dependencies {
     ksp("androidx.room:room-compiler:2.8.3")
 
     implementation("androidx.datastore:datastore-preferences:1.1.7")
-    implementation("androidx.work:work-runtime-ktx:2.10.5")
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
