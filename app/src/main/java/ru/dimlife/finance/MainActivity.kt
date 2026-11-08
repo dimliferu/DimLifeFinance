@@ -503,7 +503,7 @@ private fun SettingsScreen(modifier: Modifier, darkTheme: Boolean, onThemeChange
         }
         UpdateSection()
         EmptyState("Данные хранятся на устройстве", "Регистрация и подключение к банку не требуются. Экспорт и резервное копирование добавим следующим этапом.")
-        Text("DimLife Finance · версия 0.4.0", color = Muted, fontSize = 11.sp)
+        Text("DimLife Finance · версия 0.5.0", color = Muted, fontSize = 11.sp)
     }
 }
 
@@ -519,7 +519,7 @@ private fun UpdateSection() {
     val scope = rememberCoroutineScope()
     val currentVersion = remember {
         @Suppress("DEPRECATION")
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.4.0"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.5.0"
     }
     var latest by remember { mutableStateOf<LatestRelease?>(null) }
     var downloadedApk by remember { mutableStateOf<File?>(null) }
