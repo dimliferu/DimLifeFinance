@@ -638,7 +638,7 @@ private fun CapitalScreen(
     var marketMessage by remember { mutableStateOf("Котировки MOEX с задержкой примерно 15 минут.") }
     val now = System.currentTimeMillis()
     val depositValue = deposits.sumOf { it.principalMinor + depositInterestMinor(it, now) }
-    val securitiesValue = investments.sumOf { (if (it.currentPriceMinor > 0) it.currentPriceMinor else it.averageBuyPriceMinor) * it.quantity.toLong() }
+    val securitiesValue = investments.sumOf { ((if (it.currentPriceMinor > 0) it.currentPriceMinor else it.averageBuyPriceMinor) * it.quantity).toLong() }
     val totalCapital = cashBalance + depositValue + securitiesValue
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Мой капитал", fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -680,8 +680,8 @@ private fun CapitalScreen(
         if (investments.isEmpty()) EmptyState("Портфель пока пуст", "Добавь тикер акции или фонда и укажи количество и цену покупки.")
         investments.forEach { item ->
             val price = if (item.currentPriceMinor > 0) item.currentPriceMinor else item.averageBuyPriceMinor
-            val value = price * item.quantity.toLong()
-            val cost = item.averageBuyPriceMinor * item.quantity.toLong()
+            val value = (price * item.quantity).toLong()
+            val cost = (item.averageBuyPriceMinor * item.quantity).toLong()
             val profit = value - cost
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1085,7 +1085,7 @@ private fun SettingsScreen(
         BackupSection(dao)
         UpdateSection()
         EmptyState("Данные хранятся на устройстве", "Финансовая информация не отправляется на сервер и не требует подключения к банку.")
-        Text("DimLife Finance · версия 0.7.0", color = Muted, fontSize = 11.sp)
+        Text("DimLife Finance · версия 0.9.0", color = Muted, fontSize = 11.sp)
     }
 }
 
@@ -1126,8 +1126,8 @@ private fun BackupSection(dao: ru.dimlife.finance.data.FinanceDao) {
                             ?: throw IOException("Не удалось прочитать файл")
                     }
                     val backup = withContext(Dispatchers.Default) { parseFinanceBackup(jsonText) }
-                    dao.restoreBackup(backup.first, backup.second, backup.third)
-                    message = "Восстановлено: ${backup.first.size} операций, ${backup.second.size} подписок, ${backup.third.size} бюджетов. Старые данные заменены."
+                    dao.restoreBackup(backup.transactions, backup.subscriptions, backup.budgets, backup.deposits, backup.investments)
+                    message = "Восстановлено: ${backup.transactions.size} операций, ${backup.subscriptions.size} подписок, ${backup.budgets.size} бюджетов, ${backup.deposits.size} вкладов и ${backup.investments.size} позиций портфеля."
                 } catch (error: Exception) {
                     message = error.message ?: "Не удалось восстановить резервную копию."
                 } finally {
@@ -1153,7 +1153,9 @@ private fun BackupSection(dao: ru.dimlife.finance.data.FinanceDao) {
                             val transactions = dao.getAllTransactions()
                             val subscriptions = dao.getAllSubscriptions()
                             val budgets = dao.getAllBudgets()
-                            pendingBackup = createFinanceBackup(transactions, subscriptions, budgets)
+                            val deposits = dao.getAllDeposits()
+                            val investments = dao.getAllInvestmentHoldings()
+                            pendingBackup = createFinanceBackup(transactions, subscriptions, budgets, deposits, investments)
                             exportLauncher.launch("DimLife-Finance-backup-${SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())}.json")
                         } catch (error: Exception) {
                             message = error.message ?: "Не удалось подготовить резервную копию."
@@ -1178,7 +1180,9 @@ private fun BackupSection(dao: ru.dimlife.finance.data.FinanceDao) {
 private fun createFinanceBackup(
     transactions: List<FinanceTransaction>,
     subscriptions: List<Subscription>,
-    budgets: List<CategoryBudget>
+    budgets: List<CategoryBudget>,
+    deposits: List<Deposit>,
+    investments: List<InvestmentHolding>
 ): String {
     val root = JSONObject()
         .put("format", "dimlife-finance-backup")
@@ -1206,10 +1210,34 @@ private fun createFinanceBackup(
                 .put("createdAtMillis", item.createdAtMillis))
         }
     })
+    root.put("deposits", JSONArray().apply {
+        deposits.forEach { item ->
+            put(JSONObject().put("id", item.id).put("bank", item.bank).put("title", item.title)
+                .put("principalMinor", item.principalMinor).put("annualRateBps", item.annualRateBps)
+                .put("openedAtMillis", item.openedAtMillis).put("maturityAtMillis", item.maturityAtMillis)
+                .put("capitalization", item.capitalization))
+        }
+    })
+    root.put("investments", JSONArray().apply {
+        investments.forEach { item ->
+            put(JSONObject().put("id", item.id).put("ticker", item.ticker).put("title", item.title)
+                .put("kind", item.kind).put("quantity", item.quantity)
+                .put("averageBuyPriceMinor", item.averageBuyPriceMinor).put("currentPriceMinor", item.currentPriceMinor)
+                .put("currency", item.currency).put("board", item.board).put("priceUpdatedAtMillis", item.priceUpdatedAtMillis))
+        }
+    })
     return root.toString(2)
 }
 
-private fun parseFinanceBackup(jsonText: String): Triple<List<FinanceTransaction>, List<Subscription>, List<CategoryBudget>> {
+private data class FinanceBackupData(
+    val transactions: List<FinanceTransaction>,
+    val subscriptions: List<Subscription>,
+    val budgets: List<CategoryBudget>,
+    val deposits: List<Deposit>,
+    val investments: List<InvestmentHolding>
+)
+
+private fun parseFinanceBackup(jsonText: String): FinanceBackupData {
     val root = JSONObject(jsonText)
     if (root.optString("format") != "dimlife-finance-backup" || root.optInt("version") != 1) {
         throw IOException("Файл не является резервной копией DimLife Finance или имеет неподдерживаемую версию.")
@@ -1246,15 +1274,41 @@ private fun parseFinanceBackup(jsonText: String): Triple<List<FinanceTransaction
             createdAtMillis = item.optLong("createdAtMillis", System.currentTimeMillis())
         )
     }
-    if (transactions.size > 100000 || subscriptions.size > 10000 || budgets.size > 10000) {
+    val depositsJson = root.optJSONArray("deposits") ?: JSONArray()
+    val deposits = (0 until depositsJson.length()).map { index ->
+        val item = depositsJson.getJSONObject(index)
+        Deposit(
+            id = item.getLong("id"), bank = item.getString("bank"), title = item.getString("title"),
+            principalMinor = item.getLong("principalMinor"), annualRateBps = item.getInt("annualRateBps"),
+            openedAtMillis = item.getLong("openedAtMillis"), maturityAtMillis = item.getLong("maturityAtMillis"),
+            capitalization = item.optBoolean("capitalization", true)
+        )
+    }
+    val investmentsJson = root.optJSONArray("investments") ?: JSONArray()
+    val investments = (0 until investmentsJson.length()).map { index ->
+        val item = investmentsJson.getJSONObject(index)
+        val kind = item.getString("kind")
+        if (kind != "SHARE" && kind != "FUND") throw IOException("Некорректный тип биржевого актива.")
+        InvestmentHolding(
+            id = item.getLong("id"), ticker = item.getString("ticker"), title = item.getString("title"),
+            kind = kind, quantity = item.getDouble("quantity"), averageBuyPriceMinor = item.getLong("averageBuyPriceMinor"),
+            currentPriceMinor = item.optLong("currentPriceMinor", 0L), currency = item.optString("currency", "RUB"),
+            board = item.optString("board", if (kind == "SHARE") "TQBR" else "TQTF"),
+            priceUpdatedAtMillis = item.optLong("priceUpdatedAtMillis", 0L)
+        )
+    }
+    if (transactions.size > 100000 || subscriptions.size > 10000 || budgets.size > 10000 ||
+        deposits.size > 10000 || investments.size > 10000) {
         throw IOException("В файле слишком много записей.")
     }
     if (transactions.any { it.title.isBlank() || it.amountMinor <= 0 } ||
         subscriptions.any { it.title.isBlank() || it.amountMinor <= 0 } ||
-        budgets.any { it.category.isBlank() || it.limitMinor <= 0 }) {
+        budgets.any { it.category.isBlank() || it.limitMinor <= 0 } ||
+        deposits.any { it.bank.isBlank() || it.title.isBlank() || it.principalMinor <= 0 || it.annualRateBps < 0 } ||
+        investments.any { it.ticker.isBlank() || it.title.isBlank() || it.quantity <= 0 || it.averageBuyPriceMinor <= 0 }) {
         throw IOException("В резервной копии обнаружены некорректные записи.")
     }
-    return Triple(transactions, subscriptions, budgets)
+    return FinanceBackupData(transactions, subscriptions, budgets, deposits, investments)
 }
 
 private data class LatestRelease(
