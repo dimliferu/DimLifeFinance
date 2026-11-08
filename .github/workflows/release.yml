@@ -73,7 +73,7 @@ jobs:
           test -n "$ANDROID_KEY_ALIAS"
           test -n "$ANDROID_KEY_PASSWORD"
           gradle --no-daemon :app:assembleRelease
-          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/DimLife-Finance-v${{ steps.version.outputs.tag }}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/${{ steps.version.outputs.apk_name }}"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
