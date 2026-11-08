@@ -101,17 +101,18 @@ jobs:
               }
               throw error;
             }
-            const legacy = release.assets.find(asset => asset.name === "DimLife.apk");
-            if (legacy) {
+            const obsoleteAssets = release.assets.filter(asset =>
+              asset.name === "DimLife.apk" || asset.name === "${{ steps.version.outputs.apk_name }}"
+            );
+            for (const asset of obsoleteAssets) {
               await github.rest.repos.deleteReleaseAsset({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                asset_id: legacy.id
+                asset_id: asset.id
               });
-              core.info("Removed legacy DimLife.apk asset");
-            } else {
-              core.info("No legacy APK asset found");
+              core.info(`Removed previous APK asset: ${asset.name}`);
             }
+            if (obsoleteAssets.length === 0) core.info("No previous APK assets found");
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
