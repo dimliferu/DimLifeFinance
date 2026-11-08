@@ -13,8 +13,8 @@ android {
         applicationId = "ru.dimlife.finance"
         minSdk = 26
         targetSdk = 36
-        versionCode = 13
-        versionName = "0.10.3" // Adds deposit closure and partial asset sales
+        versionCode = 14
+        versionName = "0.11.0" // Adds Yandex Mobile Ads banner and app-open ads
     }
 
     signingConfigs {
@@ -50,6 +50,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.11.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
+    implementation("com.yandex.android:mobileads:8.6.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
