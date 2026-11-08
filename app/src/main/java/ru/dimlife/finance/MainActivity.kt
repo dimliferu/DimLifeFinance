@@ -240,16 +240,15 @@ private fun DimLifeApp() {
             })
         }
         if (showDepositDialog) {
-            AddDepositDialog(onDismiss = { showDepositDialog = false }, onSave = { bank, title, amount, rate, maturity, capitalization ->
+            AddDepositDialog(onDismiss = { showDepositDialog = false }, onSave = { bank, title, amount, rate, opened, maturity, capitalization ->
                 scope.launch { dao.addDeposit(Deposit(bank = bank, title = title, principalMinor = (amount * 100).toLong(),
-                    annualRateBps = (rate * 100).toInt(), maturityAtMillis = maturity, capitalization = capitalization)) }
+                    annualRateBps = (rate * 100).toInt(), openedAtMillis = opened, maturityAtMillis = maturity, capitalization = capitalization)) }
                 showDepositDialog = false
             })
         }
         if (showInvestmentDialog) {
-            AddInvestmentDialog(onDismiss = { showInvestmentDialog = false }, onSave = { ticker, kind, quantity, buyPrice ->
+            AddInvestmentDialog(onDismiss = { showInvestmentDialog = false }, onSave = { ticker, kind, board, quantity, buyPrice ->
                 scope.launch {
-                    val board = if (kind == "SHARE") "TQBR" else "TQTF"
                     val item = InvestmentHolding(ticker = ticker, title = ticker, kind = kind, quantity = quantity,
                         averageBuyPriceMinor = (buyPrice * 100).toLong(), board = board)
                     dao.addInvestmentHolding(item)
@@ -728,13 +727,14 @@ private fun CapitalScreen(
 }
 
 @Composable
-private fun AddDepositDialog(onDismiss: () -> Unit, onSave: (String, String, Double, Double, Long, Boolean) -> Unit) {
+private fun AddDepositDialog(onDismiss: () -> Unit, onSave: (String, String, Double, Double, Long, Long, Boolean) -> Unit) {
     val context = LocalContext.current
     var bank by remember { mutableStateOf("") }
     var title by remember { mutableStateOf("Накопительный вклад") }
     var amount by remember { mutableStateOf("") }
     var rate by remember { mutableStateOf("") }
     var capitalization by remember { mutableStateOf(true) }
+    var opened by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var maturity by remember { mutableLongStateOf(Calendar.getInstance().apply { add(Calendar.YEAR, 1) }.timeInMillis) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Добавить вклад") },
         text = {
@@ -743,6 +743,11 @@ private fun AddDepositDialog(onDismiss: () -> Unit, onSave: (String, String, Dou
                 OutlinedTextField(title, { title = it }, label = { Text("Название вклада") }, singleLine = true)
                 OutlinedTextField(amount, { amount = it }, label = { Text("Сумма, ₽") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
                 OutlinedTextField(rate, { rate = it }, label = { Text("Ставка, % годовых") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+                OutlinedButton(onClick = {
+                    val cal = Calendar.getInstance().apply { timeInMillis = opened }
+                    DatePickerDialog(context, { _, y, m, d -> opened = Calendar.getInstance().apply { set(y, m, d, 12, 0, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis },
+                        cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).show()
+                }) { Text("Дата открытия: ${date(opened)}") }
                 OutlinedButton(onClick = {
                     val cal = Calendar.getInstance().apply { timeInMillis = maturity }
                     DatePickerDialog(context, { _, y, m, d -> maturity = Calendar.getInstance().apply { set(y, m, d, 12, 0, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis },
@@ -757,16 +762,17 @@ private fun AddDepositDialog(onDismiss: () -> Unit, onSave: (String, String, Dou
         confirmButton = { TextButton(onClick = {
             val sum = amount.replace(',', '.').toDoubleOrNull()
             val percent = rate.replace(',', '.').toDoubleOrNull()
-            if (bank.isNotBlank() && title.isNotBlank() && sum != null && sum > 0 && percent != null && percent in 0.0..100.0 && maturity > System.currentTimeMillis())
-                onSave(bank.trim(), title.trim(), sum, percent, maturity, capitalization)
+            if (bank.isNotBlank() && title.isNotBlank() && sum != null && sum > 0 && percent != null && percent in 0.0..100.0 && maturity > opened && opened <= System.currentTimeMillis())
+                onSave(bank.trim(), title.trim(), sum, percent, opened, maturity, capitalization)
         }) { Text("Сохранить") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
     )
 }
 
 @Composable
-private fun AddInvestmentDialog(onDismiss: () -> Unit, onSave: (String, String, Double, Double) -> Unit) {
+private fun AddInvestmentDialog(onDismiss: () -> Unit, onSave: (String, String, String, Double, Double) -> Unit) {
     var kind by remember { mutableStateOf("SHARE") }
+    var board by remember { mutableStateOf("TQBR") }
     var ticker by remember { mutableStateOf("") }
     var quantity by remember { mutableStateOf("") }
     var buyPrice by remember { mutableStateOf("") }
@@ -774,20 +780,21 @@ private fun AddInvestmentDialog(onDismiss: () -> Unit, onSave: (String, String, 
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterChip(selected = kind == "SHARE", onClick = { kind = "SHARE" }, label = { Text("Акция") })
-                    FilterChip(selected = kind == "FUND", onClick = { kind = "FUND" }, label = { Text("Фонд / ETF") })
+                    FilterChip(selected = board == "TQBR", onClick = { kind = "SHARE"; board = "TQBR" }, label = { Text("Акция") })
+                    FilterChip(selected = board == "TQIF", onClick = { kind = "FUND"; board = "TQIF" }, label = { Text("Фонд / ПИФ") })
+                    FilterChip(selected = board == "TQTF", onClick = { kind = "FUND"; board = "TQTF" }, label = { Text("ETF") })
                 }
                 OutlinedTextField(ticker, { ticker = it.uppercase(Locale.ROOT) }, label = { Text("Тикер MOEX") }, singleLine = true)
                 OutlinedTextField(quantity, { quantity = it }, label = { Text("Количество бумаг / паёв") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
                 OutlinedTextField(buyPrice, { buyPrice = it }, label = { Text("Средняя цена покупки, ₽") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
-                Text("Рыночная цена берётся с Московской биржи с задержкой. Акции: TQBR, фонды: TQTF.", color = Muted, fontSize = 10.sp)
+                Text("Рыночная цена берётся с Московской биржи с задержкой. Акции: TQBR, ПИФ: TQIF, ETF: TQTF.", color = Muted, fontSize = 10.sp)
             }
         },
         confirmButton = { TextButton(onClick = {
             val count = quantity.replace(',', '.').toDoubleOrNull()
             val price = buyPrice.replace(',', '.').toDoubleOrNull()
             if (ticker.matches(Regex("[A-Z0-9._-]{1,20}")) && count != null && count > 0 && price != null && price > 0)
-                onSave(ticker, kind, count, price)
+                onSave(ticker, kind, board, count, price)
         }) { Text("Сохранить") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
     )
