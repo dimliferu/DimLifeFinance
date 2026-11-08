@@ -65,6 +65,17 @@ data class InvestmentHolding(
     val priceUpdatedAtMillis: Long = 0
 )
 
+@Entity(tableName = "capital_transfers")
+data class CapitalTransfer(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val direction: String,
+    val assetType: String,
+    val assetName: String,
+    val amountMinor: Long,
+    val dateMillis: Long = System.currentTimeMillis(),
+    val note: String = ""
+)
+
 @Entity(
     tableName = "budgets",
     indices = [Index(value = ["category", "monthKey"], unique = true)]
@@ -97,6 +108,12 @@ interface FinanceDao {
     @Query("SELECT * FROM investment_holdings ORDER BY ticker ASC")
     fun observeInvestmentHoldings(): Flow<List<InvestmentHolding>>
 
+    @Query("SELECT * FROM capital_transfers ORDER BY dateMillis DESC, id DESC")
+    fun observeCapitalTransfers(): Flow<List<CapitalTransfer>>
+
+    @Query("SELECT * FROM capital_transfers ORDER BY dateMillis DESC, id DESC")
+    suspend fun getAllCapitalTransfers(): List<CapitalTransfer>
+
     @Query("SELECT * FROM deposits ORDER BY maturityAtMillis ASC")
     suspend fun getAllDeposits(): List<Deposit>
 
@@ -118,6 +135,9 @@ interface FinanceDao {
     @Query("DELETE FROM investment_holdings")
     suspend fun clearInvestmentHoldings()
 
+    @Query("DELETE FROM capital_transfers")
+    suspend fun clearCapitalTransfers()
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTransactions(items: List<FinanceTransaction>)
 
@@ -133,24 +153,30 @@ interface FinanceDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertInvestmentHoldings(items: List<InvestmentHolding>)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertCapitalTransfers(items: List<CapitalTransfer>)
+
     @Transaction
     suspend fun restoreBackup(
         transactions: List<FinanceTransaction>,
         subscriptions: List<Subscription>,
         budgets: List<CategoryBudget>,
         deposits: List<Deposit>,
-        investments: List<InvestmentHolding>
+        investments: List<InvestmentHolding>,
+        transfers: List<CapitalTransfer>
     ) {
         clearTransactions()
         clearSubscriptions()
         clearBudgets()
         clearDeposits()
         clearInvestmentHoldings()
+        clearCapitalTransfers()
         if (transactions.isNotEmpty()) insertTransactions(transactions)
         if (subscriptions.isNotEmpty()) insertSubscriptions(subscriptions)
         if (budgets.isNotEmpty()) insertBudgets(budgets)
         if (deposits.isNotEmpty()) insertDeposits(deposits)
         if (investments.isNotEmpty()) insertInvestmentHoldings(investments)
+        if (transfers.isNotEmpty()) insertCapitalTransfers(transfers)
     }
 
     @Insert
@@ -189,6 +215,12 @@ interface FinanceDao {
     @Delete
     suspend fun deleteInvestmentHolding(item: InvestmentHolding)
 
+    @Insert
+    suspend fun addCapitalTransfer(item: CapitalTransfer)
+
+    @Delete
+    suspend fun deleteCapitalTransfer(item: CapitalTransfer)
+
     @Query("SELECT * FROM subscriptions WHERE isActive = 1 ORDER BY nextPaymentMillis ASC")
     fun observeSubscriptions(): Flow<List<Subscription>>
 
@@ -202,7 +234,7 @@ interface FinanceDao {
     suspend fun deleteSubscription(item: Subscription)
 }
 
-@Database(entities = [FinanceTransaction::class, Subscription::class, CategoryBudget::class, Deposit::class, InvestmentHolding::class], version = 3, exportSchema = false)
+@Database(entities = [FinanceTransaction::class, Subscription::class, CategoryBudget::class, Deposit::class, InvestmentHolding::class, CapitalTransfer::class], version = 4, exportSchema = false)
 abstract class FinanceDatabase : RoomDatabase() {
     abstract fun financeDao(): FinanceDao
 
@@ -221,6 +253,12 @@ abstract class FinanceDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("CREATE TABLE IF NOT EXISTS `capital_transfers` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `direction` TEXT NOT NULL, `assetType` TEXT NOT NULL, `assetName` TEXT NOT NULL, `amountMinor` INTEGER NOT NULL, `dateMillis` INTEGER NOT NULL, `note` TEXT NOT NULL)")
+            }
+        }
+
         @Volatile private var INSTANCE: FinanceDatabase? = null
 
         fun get(context: Context): FinanceDatabase =
@@ -229,7 +267,7 @@ abstract class FinanceDatabase : RoomDatabase() {
                     context.applicationContext,
                     FinanceDatabase::class.java,
                     "dimlife_finance.db"
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { INSTANCE = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { INSTANCE = it }
             }
     }
 }
