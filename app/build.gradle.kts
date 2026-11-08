@@ -14,7 +14,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 14
-        versionName = "0.11.0" // Adds Yandex Mobile Ads banner and app-open ads
+        versionName = "0.11.0" // Yandex banner and frequency-capped app-open monetization
     }
 
     signingConfigs {
