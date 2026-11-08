@@ -587,7 +587,7 @@ private suspend fun fetchMoexQuote(ticker: String, board: String): MoexQuote =
             setRequestProperty("Accept", "application/json")
         }
         try {
-            if (connection.responseCode !in 200..299) throw IOException("Мосбиржа ответила: \${connection.responseCode}")
+            if (connection.responseCode !in 200..299) throw IOException("Мосбиржа ответила: ${connection.responseCode}")
             val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
             val market = root.optJSONObject("marketdata") ?: throw IOException("Нет рыночных данных по тикеру")
             val columns = market.optJSONArray("columns") ?: throw IOException("Нет колонок котировки")
@@ -668,9 +668,9 @@ private fun CapitalScreen(
                             val quote = fetchMoexQuote(item.ticker, item.board)
                             dao.updateInvestmentHolding(item.copy(title = quote.title, currentPriceMinor = quote.priceMinor, priceUpdatedAtMillis = System.currentTimeMillis()))
                             updated++
-                        } catch (error: Exception) { errors.add("\${item.ticker}: \${error.message}") }
+                        } catch (error: Exception) { errors.add("${item.ticker}: ${error.message}") }
                     }
-                    marketMessage = if (errors.isEmpty()) "Обновлено котировок: $updated" else "Обновлено: $updated. Ошибки: \${errors.take(2).joinToString("; ")}"
+                    marketMessage = if (errors.isEmpty()) "Обновлено котировок: $updated" else "Обновлено: $updated. Ошибки: ${errors.take(2).joinToString("; ")}"
                     refreshing = false
                 }
             }) { Text(if (refreshing) "Обновление…" else "Обновить цены") }
@@ -687,17 +687,17 @@ private fun CapitalScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(item.title, fontWeight = FontWeight.SemiBold)
-                            Text("\${item.ticker} · \${if (item.kind == "SHARE") "Акция" else "Фонд / ETF"}", color = Muted, fontSize = 11.sp)
+                            Text("${item.ticker} · ${if (item.kind == "SHARE") "Акция" else "Фонд / ETF"}", color = Muted, fontSize = 11.sp)
                         }
                         IconButton(onClick = { scope.launch { dao.deleteInvestmentHolding(item) } }) { Icon(Icons.Outlined.DeleteOutline, "Удалить", tint = Muted) }
                     }
-                    Text("Стоимость: \${money(value)}", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text("Стоимость: ${money(value)}", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Кол-во: \${String.format(Locale("ru", "RU"), "%.4f", item.quantity)}", color = Muted, fontSize = 11.sp)
-                        Text("Цена: \${money(price)}", color = Muted, fontSize = 11.sp)
+                        Text("Кол-во: ${String.format(Locale("ru", "RU"), "%.4f", item.quantity)}", color = Muted, fontSize = 11.sp)
+                        Text("Цена: ${money(price)}", color = Muted, fontSize = 11.sp)
                     }
-                    Text("Результат: \${if (profit >= 0) "+" else ""}\${money(profit)}", color = if (profit >= 0) Green else Color(0xFFFF9A83), fontSize = 12.sp)
-                    Text(if (item.priceUpdatedAtMillis > 0) "Котировка: \${date(item.priceUpdatedAtMillis)}" else "Нет котировки — показана цена покупки", color = Muted, fontSize = 10.sp)
+                    Text("Результат: ${if (profit >= 0) "+" else ""}${money(profit)}", color = if (profit >= 0) Green else Color(0xFFFF9A83), fontSize = 12.sp)
+                    Text(if (item.priceUpdatedAtMillis > 0) "Котировка: ${date(item.priceUpdatedAtMillis)}" else "Нет котировки — показана цена покупки", color = Muted, fontSize = 10.sp)
                 }
             }
         }
@@ -713,12 +713,12 @@ private fun CapitalScreen(
                         IconButton(onClick = { scope.launch { dao.deleteDeposit(deposit) } }) { Icon(Icons.Outlined.DeleteOutline, "Удалить вклад", tint = Muted) }
                     }
                     Text(money(deposit.principalMinor), fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                    Text("Ставка: \${String.format(Locale("ru", "RU"), "%.2f", deposit.annualRateBps / 100.0)}% · \${if (deposit.capitalization) "с капитализацией" else "без капитализации"}", color = Muted, fontSize = 11.sp)
+                    Text("Ставка: ${String.format(Locale("ru", "RU"), "%.2f", deposit.annualRateBps / 100.0)}% · ${if (deposit.capitalization) "с капитализацией" else "без капитализации"}", color = Muted, fontSize = 11.sp)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column { Text("Начислено", color = Muted, fontSize = 10.sp); Text(money(accrued), color = Green, fontWeight = FontWeight.SemiBold) }
                         Column(horizontalAlignment = Alignment.End) { Text("К концу срока", color = Muted, fontSize = 10.sp); Text(money(expected), color = Green, fontWeight = FontWeight.SemiBold) }
                     }
-                    Text("Окончание: \${date(deposit.maturityAtMillis)}", color = Muted, fontSize = 10.sp)
+                    Text("Окончание: ${date(deposit.maturityAtMillis)}", color = Muted, fontSize = 10.sp)
                 }
             }
         }
