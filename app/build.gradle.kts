@@ -13,8 +13,8 @@ android {
         applicationId = "ru.dimlife.finance"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.9.0" // Final signed release build with investments and deposits
+        versionCode = 10
+        versionName = "0.10.0" // Adds cash-to-asset transfer tracking
     }
 
     signingConfigs {
