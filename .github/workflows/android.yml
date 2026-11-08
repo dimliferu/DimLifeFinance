@@ -33,7 +33,10 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses
+        shell: bash
+        run: |
+          set +o pipefail
+          yes | sdkmanager --licenses
 
       - name: Install Android SDK 36
         run: sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;36.0.0"
