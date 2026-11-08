@@ -176,7 +176,6 @@ private fun DimLifeApp() {
                     onEdit = { editingSubscription = it }
                 )
                 Tab.ANALYTICS -> AnalyticsScreen(Modifier.padding(padding), income, expenses, transactions, budgets,
-                    onAddBudget = { showBudgetDialog = true },
                     onDeleteBudget = { item -> scope.launch { dao.deleteBudget(item) } }
                 )
                 Tab.SETTINGS -> SettingsScreen(Modifier.padding(padding), darkTheme) { darkTheme = it }
@@ -362,7 +361,6 @@ private fun AnalyticsScreen(
     expenses: Long,
     items: List<FinanceTransaction>,
     budgets: List<CategoryBudget>,
-    onAddBudget: () -> Unit,
     onDeleteBudget: (CategoryBudget) -> Unit
 ) {
     val total = (income + expenses).coerceAtLeast(1)
@@ -469,7 +467,7 @@ private fun SettingsScreen(modifier: Modifier, darkTheme: Boolean, onThemeChange
         }
         UpdateSection()
         EmptyState("Данные хранятся на устройстве", "Регистрация и подключение к банку не требуются. Экспорт и резервное копирование добавим следующим этапом.")
-        Text("DimLife Finance · версия 0.3.0", color = Muted, fontSize = 11.sp)
+        Text("DimLife Finance · версия 0.4.0", color = Muted, fontSize = 11.sp)
     }
 }
 
@@ -485,7 +483,7 @@ private fun UpdateSection() {
     val scope = rememberCoroutineScope()
     val currentVersion = remember {
         @Suppress("DEPRECATION")
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.3.0"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.4.0"
     }
     var latest by remember { mutableStateOf<LatestRelease?>(null) }
     var downloadedApk by remember { mutableStateOf<File?>(null) }
