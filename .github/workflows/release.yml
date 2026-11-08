@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Версия релиза, например v0.5.0"
+        description: "Версия релиза, например v0.6.0"
         required: true
-        default: "v0.5.0"
+        default: "v0.6.0"
 
 permissions:
   contents: write
@@ -86,11 +86,21 @@ jobs:
         with:
           script: |
             const tag = "${{ steps.version.outputs.tag }}";
-            const { data: release } = await github.rest.repos.getReleaseByTag({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag
-            });
+            let release;
+            try {
+              const response = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag
+              });
+              release = response.data;
+            } catch (error) {
+              if (error.status === 404) {
+                core.info("Release does not exist yet; it will be created by the publish step");
+                return;
+              }
+              throw error;
+            }
             const legacy = release.assets.find(asset => asset.name === "DimLife.apk");
             if (legacy) {
               await github.rest.repos.deleteReleaseAsset({
