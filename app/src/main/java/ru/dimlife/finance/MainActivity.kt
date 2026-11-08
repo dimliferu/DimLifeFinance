@@ -357,7 +357,6 @@ private fun OperationsScreen(modifier: Modifier, items: List<FinanceTransaction>
     }
 }
 
-@Composable
 private data class ProjectedPayment(val subscription: Subscription, val dateMillis: Long)
 
 private fun projectPaymentsForMonth(subscriptions: List<Subscription>, monthMillis: Long): List<ProjectedPayment> {
