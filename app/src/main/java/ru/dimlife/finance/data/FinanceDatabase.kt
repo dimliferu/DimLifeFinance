@@ -8,6 +8,7 @@ import androidx.room.Entity
 import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import androidx.room.Update
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import kotlinx.coroutines.flow.Flow
@@ -41,6 +42,9 @@ interface FinanceDao {
     @Insert
     suspend fun addTransaction(item: FinanceTransaction)
 
+    @Update
+    suspend fun updateTransaction(item: FinanceTransaction)
+
     @Delete
     suspend fun deleteTransaction(item: FinanceTransaction)
 
@@ -49,6 +53,9 @@ interface FinanceDao {
 
     @Insert
     suspend fun addSubscription(item: Subscription)
+
+    @Update
+    suspend fun updateSubscription(item: Subscription)
 
     @Delete
     suspend fun deleteSubscription(item: Subscription)
