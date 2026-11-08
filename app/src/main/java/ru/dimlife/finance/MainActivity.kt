@@ -22,6 +22,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.preferencesDataStore
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -35,6 +38,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.room.Room
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import ru.dimlife.finance.data.FinanceDatabase
 import ru.dimlife.finance.data.FinanceTransaction
@@ -55,6 +59,8 @@ private val Green = Color(0xFF42D982)
 private val DarkBackground = Color(0xFF0B110E)
 private val DarkSurface = Color(0xFF141D18)
 private val Muted = Color(0xFF9BAAA0)
+private val Context.financeDataStore by preferencesDataStore(name = "dimlife_finance_settings")
+private val DARK_THEME_KEY = booleanPreferencesKey("dark_theme")
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -78,7 +84,8 @@ private fun DimLifeApp() {
     val budgets by dao.observeBudgets(monthKey).collectAsStateWithLifecycle(initialValue = emptyList())
     val scope = rememberCoroutineScope()
     var selectedTab by remember { mutableStateOf(Tab.HOME) }
-    var darkTheme by remember { mutableStateOf(true) }
+    val darkTheme by context.financeDataStore.data.map { preferences -> preferences[DARK_THEME_KEY] ?: true }
+        .collectAsStateWithLifecycle(initialValue = true)
     var showTransactionDialog by remember { mutableStateOf(false) }
     var showSubscriptionDialog by remember { mutableStateOf(false) }
     var showBudgetDialog by remember { mutableStateOf(false) }
@@ -180,7 +187,9 @@ private fun DimLifeApp() {
                 Tab.ANALYTICS -> AnalyticsScreen(Modifier.padding(padding), income, expenses, transactions, budgets,
                     onDeleteBudget = { item -> scope.launch { dao.deleteBudget(item) } }
                 )
-                Tab.SETTINGS -> SettingsScreen(Modifier.padding(padding), darkTheme) { darkTheme = it }
+                Tab.SETTINGS -> SettingsScreen(Modifier.padding(padding), darkTheme) { enabled ->
+                    scope.launch { context.financeDataStore.edit { preferences -> preferences[DARK_THEME_KEY] = enabled } }
+                }
             }
         }
 
@@ -308,10 +317,35 @@ private fun TransactionRow(item: FinanceTransaction, onEdit: (FinanceTransaction
 
 @Composable
 private fun OperationsScreen(modifier: Modifier, items: List<FinanceTransaction>, onDelete: (FinanceTransaction) -> Unit, onEdit: (FinanceTransaction) -> Unit) {
+    var query by remember { mutableStateOf("") }
+    var typeFilter by remember { mutableStateOf("ALL") }
+    val filteredItems = items.filter { item ->
+        (typeFilter == "ALL" || item.type == typeFilter) &&
+            (query.isBlank() || item.title.contains(query.trim(), ignoreCase = true) || item.category.contains(query.trim(), ignoreCase = true))
+    }
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Text("Все операции", fontSize = 22.sp, fontWeight = FontWeight.Bold) }
-        if (items.isEmpty()) item { EmptyState("История пока пуста", "Добавь доход или расход с помощью кнопки +.") }
-        items(items, key = { it.id }) { TransactionRow(it, onEdit, onDelete) }
+        item {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Поиск по названию или категории") },
+                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                singleLine = true
+            )
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = typeFilter == "ALL", onClick = { typeFilter = "ALL" }, label = { Text("Все") })
+                FilterChip(selected = typeFilter == "INCOME", onClick = { typeFilter = "INCOME" }, label = { Text("Доходы") })
+                FilterChip(selected = typeFilter == "EXPENSE", onClick = { typeFilter = "EXPENSE" }, label = { Text("Расходы") })
+            }
+        }
+        if (filteredItems.isEmpty()) {
+            item { EmptyState(if (items.isEmpty()) "История пока пуста" else "Ничего не найдено", if (items.isEmpty()) "Добавь доход или расход с помощью кнопки +." else "Измени запрос или фильтр.") }
+        }
+        items(filteredItems, key = { it.id }) { TransactionRow(it, onEdit, onDelete) }
     }
 }
 
