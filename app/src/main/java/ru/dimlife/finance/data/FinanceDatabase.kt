@@ -13,6 +13,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.room.Update
+import androidx.room.Transaction
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import kotlinx.coroutines.flow.Flow
@@ -54,6 +55,47 @@ data class CategoryBudget(
 interface FinanceDao {
     @Query("SELECT * FROM transactions ORDER BY dateMillis DESC")
     fun observeTransactions(): Flow<List<FinanceTransaction>>
+
+    @Query("SELECT * FROM transactions ORDER BY dateMillis DESC")
+    suspend fun getAllTransactions(): List<FinanceTransaction>
+
+    @Query("SELECT * FROM subscriptions ORDER BY nextPaymentMillis ASC")
+    suspend fun getAllSubscriptions(): List<Subscription>
+
+    @Query("SELECT * FROM budgets ORDER BY monthKey DESC, category ASC")
+    suspend fun getAllBudgets(): List<CategoryBudget>
+
+    @Query("DELETE FROM transactions")
+    suspend fun clearTransactions()
+
+    @Query("DELETE FROM subscriptions")
+    suspend fun clearSubscriptions()
+
+    @Query("DELETE FROM budgets")
+    suspend fun clearBudgets()
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertTransactions(items: List<FinanceTransaction>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSubscriptions(items: List<Subscription>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertBudgets(items: List<CategoryBudget>)
+
+    @Transaction
+    suspend fun restoreBackup(
+        transactions: List<FinanceTransaction>,
+        subscriptions: List<Subscription>,
+        budgets: List<CategoryBudget>
+    ) {
+        clearTransactions()
+        clearSubscriptions()
+        clearBudgets()
+        if (transactions.isNotEmpty()) insertTransactions(transactions)
+        if (subscriptions.isNotEmpty()) insertSubscriptions(subscriptions)
+        if (budgets.isNotEmpty()) insertBudgets(budgets)
+    }
 
     @Insert
     suspend fun addTransaction(item: FinanceTransaction)
