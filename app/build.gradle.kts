@@ -13,8 +13,8 @@ android {
         applicationId = "ru.dimlife.finance"
         minSdk = 26
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.7.0" // Payment calendar, reminders, safe repeatable release
+        versionCode = 8
+        versionName = "0.8.0" // Monthly analytics, six-month trends, category spending
     }
 
     signingConfigs {
