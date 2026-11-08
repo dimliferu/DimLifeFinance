@@ -18,7 +18,8 @@ import com.yandex.mobile.ads.common.YandexAds
  * A loaded ad may be shown only after the app stayed in background for at least two minutes.
  */
 class YandexAppOpenAdManager(
-    private val application: Application
+    private val application: Application,
+    private val onInitialized: () -> Unit
 ) : Application.ActivityLifecycleCallbacks {
 
     companion object {
@@ -39,6 +40,7 @@ class YandexAppOpenAdManager(
         application.registerActivityLifecycleCallbacks(this)
         YandexAds.initialize(application) {
             loadAd()
+            onInitialized()
         }
     }
 
