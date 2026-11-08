@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Версия релиза, например v0.2.0"
+        required: true
+        default: "v0.2.0"
 
 permissions:
   contents: write
@@ -63,6 +69,8 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: DimLife ${{ github.ref_name }}
+          tag_name: ${{ inputs.tag_name || github.ref_name }}
+          target_commitish: main
+          name: DimLife ${{ inputs.tag_name || github.ref_name }}
           generate_release_notes: true
           files: ${{ runner.temp }}/DimLife.apk
