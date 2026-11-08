@@ -8,6 +8,10 @@ import androidx.room.Entity
 import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import androidx.room.Index
+import androidx.room.OnConflictStrategy
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.room.Update
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -34,6 +38,18 @@ data class Subscription(
     val isActive: Boolean = true
 )
 
+@Entity(
+    tableName = "budgets",
+    indices = [Index(value = ["category", "monthKey"], unique = true)]
+)
+data class CategoryBudget(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val category: String,
+    val limitMinor: Long,
+    val monthKey: String,
+    val createdAtMillis: Long = System.currentTimeMillis()
+)
+
 @Dao
 interface FinanceDao {
     @Query("SELECT * FROM transactions ORDER BY dateMillis DESC")
@@ -48,6 +64,15 @@ interface FinanceDao {
     @Delete
     suspend fun deleteTransaction(item: FinanceTransaction)
 
+    @Query("SELECT * FROM budgets WHERE monthKey = :monthKey ORDER BY category ASC")
+    fun observeBudgets(monthKey: String): Flow<List<CategoryBudget>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveBudget(item: CategoryBudget)
+
+    @Delete
+    suspend fun deleteBudget(item: CategoryBudget)
+
     @Query("SELECT * FROM subscriptions WHERE isActive = 1 ORDER BY nextPaymentMillis ASC")
     fun observeSubscriptions(): Flow<List<Subscription>>
 
@@ -61,11 +86,18 @@ interface FinanceDao {
     suspend fun deleteSubscription(item: Subscription)
 }
 
-@Database(entities = [FinanceTransaction::class, Subscription::class], version = 1, exportSchema = false)
+@Database(entities = [FinanceTransaction::class, Subscription::class, CategoryBudget::class], version = 2, exportSchema = false)
 abstract class FinanceDatabase : RoomDatabase() {
     abstract fun financeDao(): FinanceDao
 
     companion object {
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("CREATE TABLE IF NOT EXISTS `budgets` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `category` TEXT NOT NULL, `limitMinor` INTEGER NOT NULL, `monthKey` TEXT NOT NULL, `createdAtMillis` INTEGER NOT NULL)")
+                database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_budgets_category_monthKey` ON `budgets` (`category`, `monthKey`)")
+            }
+        }
+
         @Volatile private var INSTANCE: FinanceDatabase? = null
 
         fun get(context: Context): FinanceDatabase =
@@ -74,7 +106,7 @@ abstract class FinanceDatabase : RoomDatabase() {
                     context.applicationContext,
                     FinanceDatabase::class.java,
                     "dimlife_finance.db"
-                ).build().also { INSTANCE = it }
+                ).addMigrations(MIGRATION_1_2).build().also { INSTANCE = it }
             }
     }
 }
