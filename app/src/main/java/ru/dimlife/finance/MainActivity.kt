@@ -616,7 +616,8 @@ private suspend fun getLatestRelease(currentVersion: String): LatestRelease? =
             var apkUrl: String? = null
             for (index in 0 until assets.length()) {
                 val asset = assets.getJSONObject(index)
-                if (asset.optString("name") == "DimLife.apk") {
+                val assetName = asset.optString("name")
+                if (assetName == "DimLife-Finance-v$version.apk" || assetName == "DimLife.apk") {
                     apkUrl = asset.optString("browser_download_url")
                     break
                 }
