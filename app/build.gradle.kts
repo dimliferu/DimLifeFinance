@@ -14,7 +14,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 6
-        versionName = "0.6.0" // JSON backup and restore, budgets, filters and saved theme
+        versionName = "0.6.0" // JSON backup and restore, budgets, filters, saved theme; validated build
     }
 
     signingConfigs {
