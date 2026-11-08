@@ -133,7 +133,7 @@ jobs:
             });
             for (const release of response.data) {
               const hasVersionedApk = release.assets.some(asset =>
-                /^DimLife-Finance-v.+\\.apk$/.test(asset.name)
+                /^DimLife-Finance-v.+\.apk$/.test(asset.name)
               );
               if (!hasVersionedApk) continue;
               for (const asset of release.assets.filter(item => item.name === "DimLife.apk")) {
