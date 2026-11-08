@@ -14,7 +14,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 5
-        versionName = "0.5.0" // Budgets, operation filters, persistent theme and versioned APK updater
+        versionName = "0.5.0" // Budgets, filters, saved theme, updater and clean release assets
     }
 
     signingConfigs {
