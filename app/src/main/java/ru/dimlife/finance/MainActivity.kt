@@ -1,6 +1,11 @@
 package ru.dimlife.finance
 
 import android.os.Bundle
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -17,6 +22,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.core.content.FileProvider
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -24,13 +30,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.room.Room
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ru.dimlife.finance.data.FinanceDatabase
 import ru.dimlife.finance.data.FinanceTransaction
 import ru.dimlife.finance.data.Subscription
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.io.File
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.zip.ZipFile
+import org.json.JSONObject
 
 private val Green = Color(0xFF42D982)
 private val DarkBackground = Color(0xFF0B110E)
@@ -345,9 +359,187 @@ private fun SettingsScreen(modifier: Modifier, darkTheme: Boolean, onThemeChange
             }
             Switch(checked = darkTheme, onCheckedChange = onThemeChange)
         }
+        UpdateSection()
         EmptyState("Данные хранятся на устройстве", "Регистрация и подключение к банку не требуются. Экспорт и резервное копирование добавим следующим этапом.")
-        Text("DimLife Finance · версия 0.1.0", color = Muted, fontSize = 11.sp)
+        Text("DimLife Finance · версия 0.2.0", color = Muted, fontSize = 11.sp)
     }
+}
+
+private data class LatestRelease(
+    val version: String,
+    val apkUrl: String,
+    val releasePage: String
+)
+
+@Composable
+private fun UpdateSection() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val currentVersion = remember {
+        @Suppress("DEPRECATION")
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.2.0"
+    }
+    var latest by remember { mutableStateOf<LatestRelease?>(null) }
+    var downloadedApk by remember { mutableStateOf<File?>(null) }
+    var checking by remember { mutableStateOf(false) }
+    var downloading by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("Проверяем обновления…") }
+
+    fun checkUpdates() {
+        scope.launch {
+            checking = true
+            try {
+                latest = getLatestRelease(currentVersion)
+                message = if (latest == null) "Установлена последняя версия" else "Доступна версия ${latest!!.version}"
+            } catch (_: Exception) {
+                message = "Не удалось проверить обновления. Проверь подключение к интернету."
+            } finally {
+                checking = false
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) { checkUpdates() }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Обновление приложения", fontWeight = FontWeight.SemiBold)
+            Text("Установлена версия $currentVersion", color = Muted, fontSize = 12.sp)
+            Text(message, fontSize = 13.sp)
+            Button(
+                onClick = {
+                    val file = downloadedApk
+                    if (file != null) {
+                        try {
+                            openApkInstaller(context, file)
+                        } catch (error: Exception) {
+                            message = error.message ?: "Не удалось открыть установщик Android"
+                        }
+                    } else {
+                        val release = latest ?: return@Button
+                        scope.launch {
+                            downloading = true
+                            try {
+                                val apk = downloadApk(context, release.apkUrl)
+                                downloadedApk = apk
+                                message = "Файл скачан. Можно установить обновление."
+                                openApkInstaller(context, apk)
+                            } catch (error: Exception) {
+                                message = error.message ?: "Не удалось скачать обновление"
+                            } finally {
+                                downloading = false
+                            }
+                        }
+                    }
+                },
+                enabled = !downloading && !checking && (latest != null || downloadedApk != null),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    when {
+                        downloading -> "Скачивание…"
+                        downloadedApk != null -> "Установить скачанное обновление"
+                        else -> "Скачать и установить"
+                    }
+                )
+            }
+            TextButton(
+                onClick = { checkUpdates() },
+                enabled = !checking && !downloading
+            ) {
+                Text(if (checking) "Проверяем…" else "Проверить обновления")
+            }
+        }
+    }
+}
+
+private suspend fun getLatestRelease(currentVersion: String): LatestRelease? =
+    withContext(Dispatchers.IO) {
+        val connection = (URL("https://api.github.com/repos/dimliferu/DimLifeFinance/releases/latest").openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15000
+            readTimeout = 15000
+            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("User-Agent", "DimLife-Android")
+        }
+        try {
+            if (connection.responseCode !in 200..299) throw IOException("GitHub вернул ошибку: ${connection.responseCode}")
+            val json = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            if (json.optBoolean("draft") || json.optBoolean("prerelease")) return@withContext null
+            val version = json.optString("tag_name").removePrefix("v")
+            val assets = json.optJSONArray("assets") ?: return@withContext null
+            var apkUrl: String? = null
+            for (index in 0 until assets.length()) {
+                val asset = assets.getJSONObject(index)
+                if (asset.optString("name") == "DimLife.apk") {
+                    apkUrl = asset.optString("browser_download_url")
+                    break
+                }
+            }
+            if (apkUrl.isNullOrBlank() || compareVersions(version, currentVersion) <= 0) null
+            else LatestRelease(version, apkUrl, json.optString("html_url"))
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+private fun compareVersions(first: String, second: String): Int {
+    val left = first.split(".").map { it.toIntOrNull() ?: 0 }
+    val right = second.split(".").map { it.toIntOrNull() ?: 0 }
+    for (index in 0 until maxOf(left.size, right.size)) {
+        val a = left.getOrElse(index) { 0 }
+        val b = right.getOrElse(index) { 0 }
+        if (a != b) return a.compareTo(b)
+    }
+    return 0
+}
+
+private suspend fun downloadApk(context: Context, url: String): File =
+    withContext(Dispatchers.IO) {
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 20000
+            readTimeout = 60000
+            instanceFollowRedirects = true
+            setRequestProperty("User-Agent", "DimLife-Android")
+        }
+        val directory = File(context.cacheDir, "updates").apply { mkdirs() }
+        val apk = File(directory, "DimLife-update.apk")
+        try {
+            if (connection.responseCode !in 200..299) throw IOException("Не удалось скачать APK: ${connection.responseCode}")
+            connection.inputStream.use { input ->
+                apk.outputStream().use { output -> input.copyTo(output) }
+            }
+            if (apk.length() < 100_000) throw IOException("Скачанный файл слишком маленький и не похож на APK")
+            ZipFile(apk).use { zip ->
+                if (zip.getEntry("AndroidManifest.xml") == null) throw IOException("Файл обновления повреждён")
+            }
+            apk
+        } catch (error: Exception) {
+            apk.delete()
+            throw error
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+private fun openApkInstaller(context: Context, apk: File) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+        val settingsIntent = Intent(
+            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+            Uri.parse("package:${context.packageName}")
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(settingsIntent)
+        return
+    }
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", apk)
+    val installIntent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, "application/vnd.android.package-archive")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(installIntent)
 }
 
 @Composable
