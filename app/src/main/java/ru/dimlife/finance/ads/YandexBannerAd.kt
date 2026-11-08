@@ -26,7 +26,7 @@ fun YandexBannerAd(modifier: Modifier = Modifier) {
         modifier = modifier.fillMaxWidth().height(50.dp),
         factory = { viewContext ->
             BannerAdView(viewContext).apply {
-                setAdSize(BannerAdSize.fixedSize(widthDp))
+                setAdSize(BannerAdSize.sticky(context, widthDp))
                 setBannerAdEventListener(object : BannerAdEventListener {
                     override fun onAdLoaded() = Unit
                     override fun onAdFailedToLoad(adRequestError: AdRequestError) = Unit
