@@ -52,6 +52,7 @@ import ru.dimlife.finance.data.Subscription
 import ru.dimlife.finance.data.CategoryBudget
 import ru.dimlife.finance.data.Deposit
 import ru.dimlife.finance.data.InvestmentHolding
+import ru.dimlife.finance.data.CapitalTransfer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Calendar
@@ -92,6 +93,7 @@ private fun DimLifeApp() {
     val subscriptions by dao.observeSubscriptions().collectAsStateWithLifecycle(initialValue = emptyList())
     val deposits by dao.observeDeposits().collectAsStateWithLifecycle(initialValue = emptyList())
     val investments by dao.observeInvestmentHoldings().collectAsStateWithLifecycle(initialValue = emptyList())
+    val capitalTransfers by dao.observeCapitalTransfers().collectAsStateWithLifecycle(initialValue = emptyList())
     val monthKey = remember { SimpleDateFormat("yyyy-MM", Locale.US).format(Date()) }
     val budgets by dao.observeBudgets(monthKey).collectAsStateWithLifecycle(initialValue = emptyList())
     val scope = rememberCoroutineScope()
@@ -103,12 +105,15 @@ private fun DimLifeApp() {
     var showBudgetDialog by remember { mutableStateOf(false) }
     var showDepositDialog by remember { mutableStateOf(false) }
     var showInvestmentDialog by remember { mutableStateOf(false) }
+    var showCapitalTransferDialog by remember { mutableStateOf(false) }
     var editingTransaction by remember { mutableStateOf<FinanceTransaction?>(null) }
     var editingSubscription by remember { mutableStateOf<Subscription?>(null) }
 
     val income = transactions.filter { it.type == "INCOME" }.sumOf { it.amountMinor }
     val expenses = transactions.filter { it.type == "EXPENSE" }.sumOf { it.amountMinor }
     val balance = income - expenses
+    val cashBalance = balance - capitalTransfers.filter { it.direction == "OUT" }.sumOf { it.amountMinor } +
+        capitalTransfers.filter { it.direction == "IN" }.sumOf { it.amountMinor }
 
     val colors = if (darkTheme) darkColorScheme(
         primary = Green, onPrimary = Color(0xFF062010),
@@ -182,7 +187,7 @@ private fun DimLifeApp() {
         ) { padding ->
             when (selectedTab) {
                 Tab.HOME -> HomeScreen(
-                    Modifier.padding(padding), balance, income, expenses, transactions.take(5),
+                    Modifier.padding(padding), cashBalance, income, expenses, transactions.take(5),
                     subscriptions.take(3),
                     onAdd = { showTransactionDialog = true },
                     onDelete = { item -> scope.launch { dao.deleteTransaction(item) } },
@@ -200,9 +205,11 @@ private fun DimLifeApp() {
                     onEdit = { editingSubscription = it }
                 )
                 Tab.CAPITAL -> CapitalScreen(
-                    Modifier.padding(padding), balance, deposits, investments, dao,
+                    Modifier.padding(padding), cashBalance, deposits, investments, capitalTransfers, dao,
                     onAddDeposit = { showDepositDialog = true },
-                    onAddInvestment = { showInvestmentDialog = true }
+                    onAddInvestment = { showInvestmentDialog = true },
+                    onAddTransfer = { showCapitalTransferDialog = true },
+                    onDeleteTransfer = { item -> scope.launch { dao.deleteCapitalTransfer(item) } }
                 )
                 Tab.ANALYTICS -> AnalyticsScreen(Modifier.padding(padding), transactions, budgets,
                     onDeleteBudget = { item -> scope.launch { dao.deleteBudget(item) } }
@@ -260,6 +267,19 @@ private fun DimLifeApp() {
                 }
                 showInvestmentDialog = false
             })
+        }
+        if (showCapitalTransferDialog) {
+            AddCapitalTransferDialog(
+                onDismiss = { showCapitalTransferDialog = false },
+                onSave = { direction, assetType, assetName, amount, note, dateMillis ->
+                    scope.launch {
+                        dao.addCapitalTransfer(CapitalTransfer(direction = direction, assetType = assetType,
+                            assetName = assetName, amountMinor = (amount * 100).toLong(),
+                            note = note, dateMillis = dateMillis))
+                    }
+                    showCapitalTransferDialog = false
+                }
+            )
         }
         editingTransaction?.let { item ->
             AddTransactionDialog(initial = item, onDismiss = { editingTransaction = null }, onSave = { title, amount, type, category, dateMillis ->
@@ -629,8 +649,10 @@ private fun depositInterestMinor(deposit: Deposit, asOfMillis: Long): Long {
 @Composable
 private fun CapitalScreen(
     modifier: Modifier, cashBalance: Long, deposits: List<Deposit>,
-    investments: List<InvestmentHolding>, dao: ru.dimlife.finance.data.FinanceDao,
-    onAddDeposit: () -> Unit, onAddInvestment: () -> Unit
+    investments: List<InvestmentHolding>, transfers: List<CapitalTransfer>,
+    dao: ru.dimlife.finance.data.FinanceDao,
+    onAddDeposit: () -> Unit, onAddInvestment: () -> Unit, onAddTransfer: () -> Unit,
+    onDeleteTransfer: (CapitalTransfer) -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var refreshing by remember { mutableStateOf(false) }
@@ -655,6 +677,9 @@ private fun CapitalScreen(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onAddDeposit, modifier = Modifier.weight(1f)) { Icon(Icons.Outlined.Savings, null); Spacer(Modifier.width(5.dp)); Text("Вклад") }
             OutlinedButton(onClick = onAddInvestment, modifier = Modifier.weight(1f)) { Icon(Icons.Outlined.ShowChart, null); Spacer(Modifier.width(5.dp)); Text("Акция / фонд") }
+        }
+        OutlinedButton(onClick = onAddTransfer, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Outlined.SwapHoriz, null); Spacer(Modifier.width(7.dp)); Text("Перемещение денег")
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("Инвестиционный портфель", fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -722,8 +747,63 @@ private fun CapitalScreen(
                 }
             }
         }
+        Text("Перемещения между наличными и активами", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        if (transfers.isEmpty()) EmptyState("Перемещений пока нет", "Фиксируй пополнение вкладов и покупку активов из наличных, а также возврат денег.")
+        transfers.take(30).forEach { transfer ->
+            Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(13.dp)).padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("${if (transfer.direction == "OUT") "Из наличных →" else "В наличные ←"} ${transfer.assetName}", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                    Text("${transfer.assetType} · ${date(transfer.dateMillis)}${if (transfer.note.isNotBlank()) " · ${transfer.note}" else ""}", color = Muted, fontSize = 10.sp)
+                }
+                Text((if (transfer.direction == "OUT") "−" else "+") + money(transfer.amountMinor), color = if (transfer.direction == "OUT") Color(0xFFFF9A83) else Green, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                IconButton(onClick = { onDeleteTransfer(transfer) }) { Icon(Icons.Outlined.DeleteOutline, "Удалить перемещение", tint = Muted) }
+            }
+        }
+        Text("Перемещение меняет остаток наличных, но не является доходом или расходом. При частичном снятии или продаже отдельно скорректируй сумму вклада или количество бумаг.", color = Muted, fontSize = 10.sp)
         Text("Проценты рассчитаны ориентировочно. Фактическая сумма зависит от правил банка и налогов.", color = Muted, fontSize = 10.sp)
     }
+}
+
+@Composable
+private fun AddCapitalTransferDialog(onDismiss: () -> Unit, onSave: (String, String, String, Double, String, Long) -> Unit) {
+    var direction by remember { mutableStateOf("OUT") }
+    var assetType by remember { mutableStateOf("Вклад") }
+    var assetName by remember { mutableStateOf("") }
+    var amount by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    var dateMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val context = LocalContext.current
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Перемещение денег") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(selected = direction == "OUT", onClick = { direction = "OUT" }, label = { Text("Из наличных") })
+                    FilterChip(selected = direction == "IN", onClick = { direction = "IN" }, label = { Text("В наличные") })
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf("Вклад", "Акции", "Фонды", "Другое").forEach { type ->
+                        FilterChip(selected = assetType == type, onClick = { assetType = type }, label = { Text(type, fontSize = 10.sp) })
+                    }
+                }
+                OutlinedTextField(assetName, { assetName = it }, label = { Text("Название актива / банка") }, singleLine = true)
+                OutlinedTextField(amount, { amount = it }, label = { Text("Сумма, ₽") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+                OutlinedTextField(note, { note = it }, label = { Text("Комментарий (необязательно)") }, singleLine = true)
+                OutlinedButton(onClick = {
+                    val cal = Calendar.getInstance().apply { timeInMillis = dateMillis }
+                    DatePickerDialog(context, { _, y, m, d ->
+                        dateMillis = Calendar.getInstance().apply { set(y, m, d, 12, 0, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis
+                    }, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).show()
+                }) { Text("Дата: ${date(dateMillis)}") }
+                Text(if (direction == "OUT") "Сумма будет вычтена из наличных." else "Сумма будет добавлена к наличным.", color = Muted, fontSize = 10.sp)
+            }
+        },
+        confirmButton = { TextButton(onClick = {
+            val value = amount.replace(',', '.').toDoubleOrNull()
+            if (assetName.isNotBlank() && value != null && value > 0 && value <= 100000000000.0)
+                onSave(direction, assetType, assetName.trim(), value, note.trim(), dateMillis)
+        }) { Text("Сохранить") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
 }
 
 @Composable
@@ -1092,7 +1172,7 @@ private fun SettingsScreen(
         BackupSection(dao)
         UpdateSection()
         EmptyState("Данные хранятся на устройстве", "Финансовая информация не отправляется на сервер и не требует подключения к банку.")
-        Text("DimLife Finance · версия 0.9.0", color = Muted, fontSize = 11.sp)
+        Text("DimLife Finance · версия 0.10.0", color = Muted, fontSize = 11.sp)
     }
 }
 
@@ -1133,7 +1213,7 @@ private fun BackupSection(dao: ru.dimlife.finance.data.FinanceDao) {
                             ?: throw IOException("Не удалось прочитать файл")
                     }
                     val backup = withContext(Dispatchers.Default) { parseFinanceBackup(jsonText) }
-                    dao.restoreBackup(backup.transactions, backup.subscriptions, backup.budgets, backup.deposits, backup.investments)
+                    dao.restoreBackup(backup.transactions, backup.subscriptions, backup.budgets, backup.deposits, backup.investments, backup.transfers)
                     message = "Восстановлено: ${backup.transactions.size} операций, ${backup.subscriptions.size} подписок, ${backup.budgets.size} бюджетов, ${backup.deposits.size} вкладов и ${backup.investments.size} позиций портфеля."
                 } catch (error: Exception) {
                     message = error.message ?: "Не удалось восстановить резервную копию."
@@ -1151,7 +1231,7 @@ private fun BackupSection(dao: ru.dimlife.finance.data.FinanceDao) {
     ) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Резервное копирование", fontWeight = FontWeight.SemiBold)
-            Text("Экспортируй операции, подписки, бюджеты, вклады и биржевой портфель в JSON. Файл можно сохранить или перенести на другой телефон.", color = Muted, fontSize = 12.sp)
+            Text("Экспортируй операции, подписки, бюджеты, вклады, биржевой портфель и перемещения денег в JSON. Файл можно сохранить или перенести на другой телефон.", color = Muted, fontSize = 12.sp)
             Button(
                 onClick = {
                     scope.launch {
@@ -1162,7 +1242,8 @@ private fun BackupSection(dao: ru.dimlife.finance.data.FinanceDao) {
                             val budgets = dao.getAllBudgets()
                             val deposits = dao.getAllDeposits()
                             val investments = dao.getAllInvestmentHoldings()
-                            pendingBackup = createFinanceBackup(transactions, subscriptions, budgets, deposits, investments)
+                            val transfers = dao.getAllCapitalTransfers()
+                            pendingBackup = createFinanceBackup(transactions, subscriptions, budgets, deposits, investments, transfers)
                             exportLauncher.launch("DimLife-Finance-backup-${SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())}.json")
                         } catch (error: Exception) {
                             message = error.message ?: "Не удалось подготовить резервную копию."
@@ -1189,7 +1270,8 @@ private fun createFinanceBackup(
     subscriptions: List<Subscription>,
     budgets: List<CategoryBudget>,
     deposits: List<Deposit>,
-    investments: List<InvestmentHolding>
+    investments: List<InvestmentHolding>,
+    transfers: List<CapitalTransfer>
 ): String {
     val root = JSONObject()
         .put("format", "dimlife-finance-backup")
@@ -1233,6 +1315,13 @@ private fun createFinanceBackup(
                 .put("currency", item.currency).put("board", item.board).put("priceUpdatedAtMillis", item.priceUpdatedAtMillis))
         }
     })
+    root.put("transfers", JSONArray().apply {
+        transfers.forEach { item ->
+            put(JSONObject().put("id", item.id).put("direction", item.direction)
+                .put("assetType", item.assetType).put("assetName", item.assetName)
+                .put("amountMinor", item.amountMinor).put("dateMillis", item.dateMillis).put("note", item.note))
+        }
+    })
     return root.toString(2)
 }
 
@@ -1241,7 +1330,8 @@ private data class FinanceBackupData(
     val subscriptions: List<Subscription>,
     val budgets: List<CategoryBudget>,
     val deposits: List<Deposit>,
-    val investments: List<InvestmentHolding>
+    val investments: List<InvestmentHolding>,
+    val transfers: List<CapitalTransfer>
 )
 
 private fun parseFinanceBackup(jsonText: String): FinanceBackupData {
@@ -1304,18 +1394,30 @@ private fun parseFinanceBackup(jsonText: String): FinanceBackupData {
             priceUpdatedAtMillis = item.optLong("priceUpdatedAtMillis", 0L)
         )
     }
+    val transfersJson = root.optJSONArray("transfers") ?: JSONArray()
+    val transfers = (0 until transfersJson.length()).map { index ->
+        val item = transfersJson.getJSONObject(index)
+        val direction = item.getString("direction")
+        val assetType = item.getString("assetType")
+        if (direction != "OUT" && direction != "IN") throw IOException("Некорректное направление перемещения.")
+        if (assetType !in listOf("Вклад", "Акции", "Фонды", "Другое")) throw IOException("Некорректный тип актива в перемещении.")
+        CapitalTransfer(id = item.getLong("id"), direction = direction, assetType = assetType,
+            assetName = item.getString("assetName"), amountMinor = item.getLong("amountMinor"),
+            dateMillis = item.getLong("dateMillis"), note = item.optString("note", ""))
+    }
     if (transactions.size > 100000 || subscriptions.size > 10000 || budgets.size > 10000 ||
-        deposits.size > 10000 || investments.size > 10000) {
+        deposits.size > 10000 || investments.size > 10000 || transfers.size > 100000) {
         throw IOException("В файле слишком много записей.")
     }
     if (transactions.any { it.title.isBlank() || it.amountMinor <= 0 } ||
         subscriptions.any { it.title.isBlank() || it.amountMinor <= 0 } ||
         budgets.any { it.category.isBlank() || it.limitMinor <= 0 } ||
         deposits.any { it.bank.isBlank() || it.title.isBlank() || it.principalMinor <= 0 || it.annualRateBps < 0 } ||
-        investments.any { it.ticker.isBlank() || it.title.isBlank() || it.quantity <= 0 || it.averageBuyPriceMinor <= 0 }) {
+        investments.any { it.ticker.isBlank() || it.title.isBlank() || it.quantity <= 0 || it.averageBuyPriceMinor <= 0 } ||
+        transfers.any { it.assetName.isBlank() || it.amountMinor <= 0 }) {
         throw IOException("В резервной копии обнаружены некорректные записи.")
     }
-    return FinanceBackupData(transactions, subscriptions, budgets, deposits, investments)
+    return FinanceBackupData(transactions, subscriptions, budgets, deposits, investments, transfers)
 }
 
 private data class LatestRelease(
