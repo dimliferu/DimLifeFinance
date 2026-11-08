@@ -13,8 +13,8 @@ android {
         applicationId = "ru.dimlife.finance"
         minSdk = 26
         targetSdk = 36
-        versionCode = 12
-        versionName = "0.10.2" // Links new asset funding to cash ledger
+        versionCode = 13
+        versionName = "0.10.3" // Adds deposit closure and partial asset sales
     }
 
     signingConfigs {
