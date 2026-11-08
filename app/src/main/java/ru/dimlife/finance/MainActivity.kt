@@ -37,6 +37,7 @@ import kotlinx.coroutines.withContext
 import ru.dimlife.finance.data.FinanceDatabase
 import ru.dimlife.finance.data.FinanceTransaction
 import ru.dimlife.finance.data.Subscription
+import ru.dimlife.finance.data.CategoryBudget
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Calendar
@@ -71,11 +72,14 @@ private fun DimLifeApp() {
     val dao = remember { FinanceDatabase.get(context).financeDao() }
     val transactions by dao.observeTransactions().collectAsStateWithLifecycle(initialValue = emptyList())
     val subscriptions by dao.observeSubscriptions().collectAsStateWithLifecycle(initialValue = emptyList())
+    val monthKey = remember { SimpleDateFormat("yyyy-MM", Locale.US).format(Date()) }
+    val budgets by dao.observeBudgets(monthKey).collectAsStateWithLifecycle(initialValue = emptyList())
     val scope = rememberCoroutineScope()
     var selectedTab by remember { mutableStateOf(Tab.HOME) }
     var darkTheme by remember { mutableStateOf(true) }
     var showTransactionDialog by remember { mutableStateOf(false) }
     var showSubscriptionDialog by remember { mutableStateOf(false) }
+    var showBudgetDialog by remember { mutableStateOf(false) }
     var editingTransaction by remember { mutableStateOf<FinanceTransaction?>(null) }
     var editingSubscription by remember { mutableStateOf<Subscription?>(null) }
 
@@ -143,6 +147,12 @@ private fun DimLifeApp() {
                         containerColor = Green,
                         contentColor = Color(0xFF062010)
                     ) { Icon(Icons.Outlined.Add, contentDescription = "Добавить подписку") }
+                } else if (selectedTab == Tab.ANALYTICS) {
+                    FloatingActionButton(
+                        onClick = { showBudgetDialog = true },
+                        containerColor = Green,
+                        contentColor = Color(0xFF062010)
+                    ) { Icon(Icons.Outlined.Add, contentDescription = "Добавить бюджет") }
                 }
             }
         ) { padding ->
@@ -165,7 +175,10 @@ private fun DimLifeApp() {
                     onDelete = { item -> scope.launch { dao.deleteSubscription(item) } },
                     onEdit = { editingSubscription = it }
                 )
-                Tab.ANALYTICS -> AnalyticsScreen(Modifier.padding(padding), income, expenses, transactions)
+                Tab.ANALYTICS -> AnalyticsScreen(Modifier.padding(padding), income, expenses, transactions, budgets,
+                    onAddBudget = { showBudgetDialog = true },
+                    onDeleteBudget = { item -> scope.launch { dao.deleteBudget(item) } }
+                )
                 Tab.SETTINGS -> SettingsScreen(Modifier.padding(padding), darkTheme) { darkTheme = it }
             }
         }
@@ -189,6 +202,12 @@ private fun DimLifeApp() {
                     showSubscriptionDialog = false
                 }
             )
+        }
+        if (showBudgetDialog) {
+            AddBudgetDialog(onDismiss = { showBudgetDialog = false }, onSave = { category, limit ->
+                scope.launch { dao.saveBudget(CategoryBudget(category = category, limitMinor = (limit * 100).toLong(), monthKey = monthKey)) }
+                showBudgetDialog = false
+            })
         }
         editingTransaction?.let { item ->
             AddTransactionDialog(initial = item, onDismiss = { editingTransaction = null }, onSave = { title, amount, type, category, dateMillis ->
@@ -337,9 +356,20 @@ private fun SubscriptionRow(item: Subscription, onEdit: () -> Unit, onDelete: ()
 }
 
 @Composable
-private fun AnalyticsScreen(modifier: Modifier, income: Long, expenses: Long, items: List<FinanceTransaction>) {
+private fun AnalyticsScreen(
+    modifier: Modifier,
+    income: Long,
+    expenses: Long,
+    items: List<FinanceTransaction>,
+    budgets: List<CategoryBudget>,
+    onAddBudget: () -> Unit,
+    onDeleteBudget: (CategoryBudget) -> Unit
+) {
     val total = (income + expenses).coerceAtLeast(1)
-    Column(modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    val monthRange = remember { currentMonthRange() }
+    val spentByCategory = items.filter { it.type == "EXPENSE" && it.dateMillis in monthRange.first..monthRange.second }
+        .groupBy { it.category }.mapValues { (_, rows) -> rows.sumOf { it.amountMinor } }
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Аналитика", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -351,8 +381,79 @@ private fun AnalyticsScreen(modifier: Modifier, income: Long, expenses: Long, it
                 Text("Всего операций: ${items.size}", color = Muted, fontSize = 12.sp)
             }
         }
-        EmptyState("Следующий шаг — подробная аналитика", "Добавим диаграммы по категориям и выбор периода в следующем этапе.")
+        Text("Бюджеты на ${SimpleDateFormat("LLLL yyyy", Locale("ru", "RU")).format(Date())}", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        if (budgets.isEmpty()) {
+            EmptyState("Бюджеты не заданы", "Нажми +, чтобы установить месячный лимит для категории расходов.")
+        } else {
+            budgets.forEach { budget ->
+                val spent = spentByCategory[budget.category] ?: 0L
+                val progress = (spent.toFloat() / budget.limitMinor.coerceAtLeast(1L)).coerceIn(0f, 1f)
+                val exceeded = spent > budget.limitMinor
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(budget.category, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                            IconButton(onClick = { onDeleteBudget(budget) }) { Icon(Icons.Outlined.DeleteOutline, "Удалить бюджет", tint = Muted) }
+                        }
+                        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                            Text("Потрачено: ${money(spent)}", fontSize = 12.sp, color = if (exceeded) Color(0xFFFF8A75) else Muted)
+                            Text("Лимит: ${money(budget.limitMinor)}", fontSize = 12.sp)
+                        }
+                        LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = if (exceeded) Color(0xFFFF8A75) else Green)
+                        Text(if (exceeded) "Превышение: ${money(spent - budget.limitMinor)}" else "Осталось: ${money(budget.limitMinor - spent)}",
+                            fontSize = 12.sp, color = if (exceeded) Color(0xFFFF8A75) else Green)
+                    }
+                }
+            }
+        }
     }
+}
+
+private fun currentMonthRange(): Pair<Long, Long> {
+    val start = Calendar.getInstance().apply {
+        set(Calendar.DAY_OF_MONTH, 1)
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+    val end = (start.clone() as Calendar).apply {
+        add(Calendar.MONTH, 1)
+        add(Calendar.MILLISECOND, -1)
+    }
+    return start.timeInMillis to end.timeInMillis
+}
+
+@Composable
+private fun AddBudgetDialog(onDismiss: () -> Unit, onSave: (String, Double) -> Unit) {
+    var category by remember { mutableStateOf("Продукты") }
+    var amount by remember { mutableStateOf("") }
+    var expanded by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Новый месячный бюджет") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box {
+                    OutlinedButton(onClick = { expanded = true }) { Text("Категория: $category") }
+                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                        listOf("Продукты", "Транспорт", "Жильё", "Здоровье", "Развлечения", "Покупки", "Прочее").forEach {
+                            DropdownMenuItem(text = { Text(it) }, onClick = { category = it; expanded = false })
+                        }
+                    }
+                }
+                OutlinedTextField(amount, { amount = it }, label = { Text("Лимит на месяц, ₽") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val value = amount.replace(',', '.').toDoubleOrNull()
+                if (value != null && value > 0) onSave(category, value)
+            }) { Text("Сохранить") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
 }
 
 @Composable
