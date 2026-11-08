@@ -13,8 +13,8 @@ android {
         applicationId = "ru.dimlife.finance"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.8.0" // Monthly analytics, six-month trends, category spending
+        versionCode = 9
+        versionName = "0.9.0" // Deposits, interest accrual, MOEX portfolio
     }
 
     signingConfigs {
