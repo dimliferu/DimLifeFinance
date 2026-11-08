@@ -752,7 +752,7 @@ private fun AddDepositDialog(onDismiss: () -> Unit, onSave: (String, String, Dou
                     val cal = Calendar.getInstance().apply { timeInMillis = maturity }
                     DatePickerDialog(context, { _, y, m, d -> maturity = Calendar.getInstance().apply { set(y, m, d, 12, 0, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis },
                         cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).show()
-                }) { Text("Дата окончания: \${date(maturity)}") }
+                }) { Text("Дата окончания: ${date(maturity)}") }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Капитализация процентов", modifier = Modifier.weight(1f), fontSize = 12.sp)
                     Switch(checked = capitalization, onCheckedChange = { capitalization = it })
