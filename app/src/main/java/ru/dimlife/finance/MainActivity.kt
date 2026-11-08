@@ -50,6 +50,8 @@ import ru.dimlife.finance.data.FinanceDatabase
 import ru.dimlife.finance.data.FinanceTransaction
 import ru.dimlife.finance.data.Subscription
 import ru.dimlife.finance.data.CategoryBudget
+import ru.dimlife.finance.data.Deposit
+import ru.dimlife.finance.data.InvestmentHolding
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Calendar
@@ -79,7 +81,7 @@ class MainActivity : ComponentActivity() {
 
 private enum class Tab(val label: String) {
     HOME("Главная"), OPERATIONS("Операции"), SUBSCRIPTIONS("Подписки"),
-    ANALYTICS("Аналитика"), SETTINGS("Настройки")
+    CAPITAL("Капитал"), ANALYTICS("Аналитика"), SETTINGS("Настройки")
 }
 
 @Composable
@@ -88,6 +90,8 @@ private fun DimLifeApp() {
     val dao = remember { FinanceDatabase.get(context).financeDao() }
     val transactions by dao.observeTransactions().collectAsStateWithLifecycle(initialValue = emptyList())
     val subscriptions by dao.observeSubscriptions().collectAsStateWithLifecycle(initialValue = emptyList())
+    val deposits by dao.observeDeposits().collectAsStateWithLifecycle(initialValue = emptyList())
+    val investments by dao.observeInvestmentHoldings().collectAsStateWithLifecycle(initialValue = emptyList())
     val monthKey = remember { SimpleDateFormat("yyyy-MM", Locale.US).format(Date()) }
     val budgets by dao.observeBudgets(monthKey).collectAsStateWithLifecycle(initialValue = emptyList())
     val scope = rememberCoroutineScope()
@@ -97,6 +101,8 @@ private fun DimLifeApp() {
     var showTransactionDialog by remember { mutableStateOf(false) }
     var showSubscriptionDialog by remember { mutableStateOf(false) }
     var showBudgetDialog by remember { mutableStateOf(false) }
+    var showDepositDialog by remember { mutableStateOf(false) }
+    var showInvestmentDialog by remember { mutableStateOf(false) }
     var editingTransaction by remember { mutableStateOf<FinanceTransaction?>(null) }
     var editingSubscription by remember { mutableStateOf<Subscription?>(null) }
 
@@ -139,6 +145,7 @@ private fun DimLifeApp() {
                             Tab.HOME -> Icons.Outlined.Home
                             Tab.OPERATIONS -> Icons.Outlined.SwapHoriz
                             Tab.SUBSCRIPTIONS -> Icons.Outlined.CalendarMonth
+                            Tab.CAPITAL -> Icons.Outlined.AccountBalanceWallet
                             Tab.ANALYTICS -> Icons.Outlined.PieChart
                             Tab.SETTINGS -> Icons.Outlined.Settings
                         }
@@ -192,6 +199,11 @@ private fun DimLifeApp() {
                     onDelete = { item -> scope.launch { dao.deleteSubscription(item) } },
                     onEdit = { editingSubscription = it }
                 )
+                Tab.CAPITAL -> CapitalScreen(
+                    Modifier.padding(padding), balance, deposits, investments, dao,
+                    onAddDeposit = { showDepositDialog = true },
+                    onAddInvestment = { showInvestmentDialog = true }
+                )
                 Tab.ANALYTICS -> AnalyticsScreen(Modifier.padding(padding), transactions, budgets,
                     onDeleteBudget = { item -> scope.launch { dao.deleteBudget(item) } }
                 )
@@ -225,6 +237,29 @@ private fun DimLifeApp() {
             AddBudgetDialog(onDismiss = { showBudgetDialog = false }, onSave = { category, limit ->
                 scope.launch { dao.saveBudget(CategoryBudget(category = category, limitMinor = (limit * 100).toLong(), monthKey = monthKey)) }
                 showBudgetDialog = false
+            })
+        }
+        if (showDepositDialog) {
+            AddDepositDialog(onDismiss = { showDepositDialog = false }, onSave = { bank, title, amount, rate, maturity, capitalization ->
+                scope.launch { dao.addDeposit(Deposit(bank = bank, title = title, principalMinor = (amount * 100).toLong(),
+                    annualRateBps = (rate * 100).toInt(), maturityAtMillis = maturity, capitalization = capitalization)) }
+                showDepositDialog = false
+            })
+        }
+        if (showInvestmentDialog) {
+            AddInvestmentDialog(onDismiss = { showInvestmentDialog = false }, onSave = { ticker, kind, quantity, buyPrice ->
+                scope.launch {
+                    val board = if (kind == "SHARE") "TQBR" else "TQTF"
+                    val item = InvestmentHolding(ticker = ticker, title = ticker, kind = kind, quantity = quantity,
+                        averageBuyPriceMinor = (buyPrice * 100).toLong(), board = board)
+                    dao.addInvestmentHolding(item)
+                    try {
+                        val quote = fetchMoexQuote(ticker, board)
+                        val saved = dao.getAllInvestmentHoldings().firstOrNull { it.ticker == ticker && it.priceUpdatedAtMillis == 0L }
+                        if (saved != null) dao.updateInvestmentHolding(saved.copy(title = quote.title, currentPriceMinor = quote.priceMinor, priceUpdatedAtMillis = System.currentTimeMillis()))
+                    } catch (_: Exception) { }
+                }
+                showInvestmentDialog = false
             })
         }
         editingTransaction?.let { item ->
@@ -536,6 +571,226 @@ private fun SubscriptionRow(item: Subscription, onEdit: () -> Unit, onDelete: ()
         IconButton(onClick = onEdit) { Icon(Icons.Outlined.Edit, "Изменить", tint = Green) }
         IconButton(onClick = onDelete) { Icon(Icons.Outlined.DeleteOutline, "Удалить", tint = Muted) }
     }
+}
+
+
+private data class MoexQuote(val title: String, val priceMinor: Long)
+
+private suspend fun fetchMoexQuote(ticker: String, board: String): MoexQuote =
+    withContext(Dispatchers.IO) {
+        val safeTicker = ticker.trim().uppercase(Locale.ROOT)
+        if (!safeTicker.matches(Regex("[A-Z0-9._-]{1,20}"))) throw IOException("Некорректный тикер")
+        val url = URL("https://iss.moex.com/iss/engines/stock/markets/shares/boards/$board/securities/$safeTicker.json?iss.meta=off")
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            connectTimeout = 12000
+            readTimeout = 12000
+            setRequestProperty("User-Agent", "DimLife-Finance-Android")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            if (connection.responseCode !in 200..299) throw IOException("Мосбиржа ответила: \${connection.responseCode}")
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            val market = root.optJSONObject("marketdata") ?: throw IOException("Нет рыночных данных по тикеру")
+            val columns = market.optJSONArray("columns") ?: throw IOException("Нет колонок котировки")
+            val rows = market.optJSONArray("data") ?: throw IOException("Нет котировки")
+            if (rows.length() == 0) throw IOException("По тикеру пока нет котировок")
+            val row = rows.getJSONArray(0)
+            var price = 0.0
+            for (name in listOf("LAST", "LCURRENTPRICE", "MARKETPRICE", "PREVPRICE")) {
+                val index = (0 until columns.length()).firstOrNull { columns.optString(it) == name } ?: continue
+                val value = if (row.isNull(index)) 0.0 else row.optDouble(index, 0.0)
+                if (value > 0.0) { price = value; break }
+            }
+            if (price <= 0.0) throw IOException("Биржа не вернула доступную цену")
+            var title = safeTicker
+            val securities = root.optJSONObject("securities")
+            val securityColumns = securities?.optJSONArray("columns")
+            val securityRows = securities?.optJSONArray("data")
+            if (securityColumns != null && securityRows != null && securityRows.length() > 0) {
+                val security = securityRows.getJSONArray(0)
+                for (name in listOf("SHORTNAME", "SECNAME", "NAME")) {
+                    val index = (0 until securityColumns.length()).firstOrNull { securityColumns.optString(it) == name } ?: continue
+                    if (!security.isNull(index) && security.optString(index).isNotBlank()) { title = security.optString(index); break }
+                }
+            }
+            MoexQuote(title, (price * 100.0).toLong())
+        } finally { connection.disconnect() }
+    }
+
+private fun depositInterestMinor(deposit: Deposit, asOfMillis: Long): Long {
+    val end = minOf(asOfMillis, deposit.maturityAtMillis)
+    val days = ((end - deposit.openedAtMillis).coerceAtLeast(0L) / 86400000L).toInt()
+    val principal = deposit.principalMinor.toDouble()
+    val dailyRate = deposit.annualRateBps.toDouble() / 10000.0 / 365.0
+    val total = if (deposit.capitalization) principal * Math.pow(1.0 + dailyRate, days.toDouble())
+        else principal * (1.0 + dailyRate * days)
+    return (total - principal).coerceAtLeast(0.0).toLong()
+}
+
+@Composable
+private fun CapitalScreen(
+    modifier: Modifier, cashBalance: Long, deposits: List<Deposit>,
+    investments: List<InvestmentHolding>, dao: ru.dimlife.finance.data.FinanceDao,
+    onAddDeposit: () -> Unit, onAddInvestment: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var refreshing by remember { mutableStateOf(false) }
+    var marketMessage by remember { mutableStateOf("Котировки MOEX с задержкой примерно 15 минут.") }
+    val now = System.currentTimeMillis()
+    val depositValue = deposits.sumOf { it.principalMinor + depositInterestMinor(it, now) }
+    val securitiesValue = investments.sumOf { (if (it.currentPriceMinor > 0) it.currentPriceMinor else it.averageBuyPriceMinor) * it.quantity.toLong() }
+    val totalCapital = cashBalance + depositValue + securitiesValue
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text("Мой капитал", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF14271C)), shape = RoundedCornerShape(22.dp)) {
+            Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("ВСЕ АКТИВЫ", color = Color(0xFFB5C9BA), fontSize = 11.sp, letterSpacing = 1.sp)
+                Text(money(totalCapital), color = Color.White, fontSize = 29.sp, fontWeight = FontWeight.Bold)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column(Modifier.weight(1f)) { Text("Наличные", color = Color(0xFFB5C9BA), fontSize = 10.sp); Text(money(cashBalance), color = Color.White, fontSize = 12.sp) }
+                    Column(Modifier.weight(1f)) { Text("Вклады", color = Color(0xFFB5C9BA), fontSize = 10.sp); Text(money(depositValue), color = Color.White, fontSize = 12.sp) }
+                    Column(Modifier.weight(1f)) { Text("Биржа", color = Color(0xFFB5C9BA), fontSize = 10.sp); Text(money(securitiesValue), color = Color.White, fontSize = 12.sp) }
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onAddDeposit, modifier = Modifier.weight(1f)) { Icon(Icons.Outlined.Savings, null); Spacer(Modifier.width(5.dp)); Text("Вклад") }
+            OutlinedButton(onClick = onAddInvestment, modifier = Modifier.weight(1f)) { Icon(Icons.Outlined.ShowChart, null); Spacer(Modifier.width(5.dp)); Text("Акция / фонд") }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Инвестиционный портфель", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            TextButton(enabled = investments.isNotEmpty() && !refreshing, onClick = {
+                scope.launch {
+                    refreshing = true
+                    var updated = 0
+                    val errors = mutableListOf<String>()
+                    investments.forEach { item ->
+                        try {
+                            val quote = fetchMoexQuote(item.ticker, item.board)
+                            dao.updateInvestmentHolding(item.copy(title = quote.title, currentPriceMinor = quote.priceMinor, priceUpdatedAtMillis = System.currentTimeMillis()))
+                            updated++
+                        } catch (error: Exception) { errors.add("\${item.ticker}: \${error.message}") }
+                    }
+                    marketMessage = if (errors.isEmpty()) "Обновлено котировок: $updated" else "Обновлено: $updated. Ошибки: \${errors.take(2).joinToString("; ")}"
+                    refreshing = false
+                }
+            }) { Text(if (refreshing) "Обновление…" else "Обновить цены") }
+        }
+        Text(marketMessage, color = Muted, fontSize = 11.sp)
+        if (investments.isEmpty()) EmptyState("Портфель пока пуст", "Добавь тикер акции или фонда и укажи количество и цену покупки.")
+        investments.forEach { item ->
+            val price = if (item.currentPriceMinor > 0) item.currentPriceMinor else item.averageBuyPriceMinor
+            val value = price * item.quantity.toLong()
+            val cost = item.averageBuyPriceMinor * item.quantity.toLong()
+            val profit = value - cost
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(item.title, fontWeight = FontWeight.SemiBold)
+                            Text("\${item.ticker} · \${if (item.kind == "SHARE") "Акция" else "Фонд / ETF"}", color = Muted, fontSize = 11.sp)
+                        }
+                        IconButton(onClick = { scope.launch { dao.deleteInvestmentHolding(item) } }) { Icon(Icons.Outlined.DeleteOutline, "Удалить", tint = Muted) }
+                    }
+                    Text("Стоимость: \${money(value)}", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Кол-во: \${String.format(Locale("ru", "RU"), "%.4f", item.quantity)}", color = Muted, fontSize = 11.sp)
+                        Text("Цена: \${money(price)}", color = Muted, fontSize = 11.sp)
+                    }
+                    Text("Результат: \${if (profit >= 0) "+" else ""}\${money(profit)}", color = if (profit >= 0) Green else Color(0xFFFF9A83), fontSize = 12.sp)
+                    Text(if (item.priceUpdatedAtMillis > 0) "Котировка: \${date(item.priceUpdatedAtMillis)}" else "Нет котировки — показана цена покупки", color = Muted, fontSize = 10.sp)
+                }
+            }
+        }
+        Text("Банковские вклады", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        if (deposits.isEmpty()) EmptyState("Вкладов пока нет", "Добавь сумму, ставку и дату окончания вклада.")
+        deposits.forEach { deposit ->
+            val accrued = depositInterestMinor(deposit, now)
+            val expected = depositInterestMinor(deposit, deposit.maturityAtMillis)
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) { Text(deposit.title, fontWeight = FontWeight.SemiBold); Text(deposit.bank, color = Muted, fontSize = 11.sp) }
+                        IconButton(onClick = { scope.launch { dao.deleteDeposit(deposit) } }) { Icon(Icons.Outlined.DeleteOutline, "Удалить вклад", tint = Muted) }
+                    }
+                    Text(money(deposit.principalMinor), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text("Ставка: \${String.format(Locale("ru", "RU"), "%.2f", deposit.annualRateBps / 100.0)}% · \${if (deposit.capitalization) "с капитализацией" else "без капитализации"}", color = Muted, fontSize = 11.sp)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column { Text("Начислено", color = Muted, fontSize = 10.sp); Text(money(accrued), color = Green, fontWeight = FontWeight.SemiBold) }
+                        Column(horizontalAlignment = Alignment.End) { Text("К концу срока", color = Muted, fontSize = 10.sp); Text(money(expected), color = Green, fontWeight = FontWeight.SemiBold) }
+                    }
+                    Text("Окончание: \${date(deposit.maturityAtMillis)}", color = Muted, fontSize = 10.sp)
+                }
+            }
+        }
+        Text("Проценты рассчитаны ориентировочно. Фактическая сумма зависит от правил банка и налогов.", color = Muted, fontSize = 10.sp)
+    }
+}
+
+@Composable
+private fun AddDepositDialog(onDismiss: () -> Unit, onSave: (String, String, Double, Double, Long, Boolean) -> Unit) {
+    val context = LocalContext.current
+    var bank by remember { mutableStateOf("") }
+    var title by remember { mutableStateOf("Накопительный вклад") }
+    var amount by remember { mutableStateOf("") }
+    var rate by remember { mutableStateOf("") }
+    var capitalization by remember { mutableStateOf(true) }
+    var maturity by remember { mutableLongStateOf(Calendar.getInstance().apply { add(Calendar.YEAR, 1) }.timeInMillis) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Добавить вклад") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(bank, { bank = it }, label = { Text("Банк") }, singleLine = true)
+                OutlinedTextField(title, { title = it }, label = { Text("Название вклада") }, singleLine = true)
+                OutlinedTextField(amount, { amount = it }, label = { Text("Сумма, ₽") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+                OutlinedTextField(rate, { rate = it }, label = { Text("Ставка, % годовых") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+                OutlinedButton(onClick = {
+                    val cal = Calendar.getInstance().apply { timeInMillis = maturity }
+                    DatePickerDialog(context, { _, y, m, d -> maturity = Calendar.getInstance().apply { set(y, m, d, 12, 0, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis },
+                        cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).show()
+                }) { Text("Дата окончания: \${date(maturity)}") }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Капитализация процентов", modifier = Modifier.weight(1f), fontSize = 12.sp)
+                    Switch(checked = capitalization, onCheckedChange = { capitalization = it })
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = {
+            val sum = amount.replace(',', '.').toDoubleOrNull()
+            val percent = rate.replace(',', '.').toDoubleOrNull()
+            if (bank.isNotBlank() && title.isNotBlank() && sum != null && sum > 0 && percent != null && percent in 0.0..100.0 && maturity > System.currentTimeMillis())
+                onSave(bank.trim(), title.trim(), sum, percent, maturity, capitalization)
+        }) { Text("Сохранить") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
+}
+
+@Composable
+private fun AddInvestmentDialog(onDismiss: () -> Unit, onSave: (String, String, Double, Double) -> Unit) {
+    var kind by remember { mutableStateOf("SHARE") }
+    var ticker by remember { mutableStateOf("") }
+    var quantity by remember { mutableStateOf("") }
+    var buyPrice by remember { mutableStateOf("") }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Добавить в портфель") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(selected = kind == "SHARE", onClick = { kind = "SHARE" }, label = { Text("Акция") })
+                    FilterChip(selected = kind == "FUND", onClick = { kind = "FUND" }, label = { Text("Фонд / ETF") })
+                }
+                OutlinedTextField(ticker, { ticker = it.uppercase(Locale.ROOT) }, label = { Text("Тикер MOEX") }, singleLine = true)
+                OutlinedTextField(quantity, { quantity = it }, label = { Text("Количество бумаг / паёв") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+                OutlinedTextField(buyPrice, { buyPrice = it }, label = { Text("Средняя цена покупки, ₽") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+                Text("Рыночная цена берётся с Московской биржи с задержкой. Акции: TQBR, фонды: TQTF.", color = Muted, fontSize = 10.sp)
+            }
+        },
+        confirmButton = { TextButton(onClick = {
+            val count = quantity.replace(',', '.').toDoubleOrNull()
+            val price = buyPrice.replace(',', '.').toDoubleOrNull()
+            if (ticker.matches(Regex("[A-Z0-9._-]{1,20}")) && count != null && count > 0 && price != null && price > 0)
+                onSave(ticker, kind, count, price)
+        }) { Text("Сохранить") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
 }
 
 @Composable
