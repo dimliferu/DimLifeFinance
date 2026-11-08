@@ -211,7 +211,30 @@ private fun DimLifeApp() {
                     onAddDeposit = { showDepositDialog = true },
                     onAddInvestment = { showInvestmentDialog = true },
                     onAddTransfer = { showCapitalTransferDialog = true },
-                    onDeleteTransfer = { item -> scope.launch { dao.deleteCapitalTransfer(item) } }
+                    onDeleteTransfer = { item -> scope.launch { dao.deleteCapitalTransfer(item) } },
+                    onCloseDeposit = { deposit ->
+                        scope.launch {
+                            val returnAmount = deposit.principalMinor + depositInterestMinor(deposit, System.currentTimeMillis())
+                            dao.closeDepositToCash(deposit, CapitalTransfer(
+                                direction = "IN", assetType = "Вклад", assetName = "${deposit.bank} · ${deposit.title}",
+                                amountMinor = returnAmount, note = "Закрытие вклада; проценты рассчитаны ориентировочно"
+                            ))
+                        }
+                    },
+                    onSellInvestment = { holding, quantity ->
+                        scope.launch {
+                            val usedPrice = if (holding.currentPriceMinor > 0) holding.currentPriceMinor else holding.averageBuyPriceMinor
+                            val proceeds = (quantity * usedPrice).toLong()
+                            val remaining = (holding.quantity - quantity).coerceAtLeast(0.0)
+                            val updated = if (remaining < 0.00000001) null else holding.copy(quantity = remaining)
+                            val transfer = CapitalTransfer(
+                                direction = "IN", assetType = if (holding.kind == "SHARE") "Акции" else "Фонды",
+                                assetName = holding.ticker, amountMinor = proceeds,
+                                note = if (holding.currentPriceMinor > 0) "Продажа по последней котировке MOEX" else "Продажа по средней цене покупки: котировки нет"
+                            )
+                            dao.sellInvestmentToCash(holding, updated, transfer)
+                        }
+                    }
                 )
                 Tab.ANALYTICS -> AnalyticsScreen(Modifier.padding(padding), transactions, budgets,
                     onDeleteBudget = { item -> scope.launch { dao.deleteBudget(item) } }
@@ -667,9 +690,13 @@ private fun CapitalScreen(
     investments: List<InvestmentHolding>, transfers: List<CapitalTransfer>,
     dao: ru.dimlife.finance.data.FinanceDao,
     onAddDeposit: () -> Unit, onAddInvestment: () -> Unit, onAddTransfer: () -> Unit,
-    onDeleteTransfer: (CapitalTransfer) -> Unit
+    onDeleteTransfer: (CapitalTransfer) -> Unit,
+    onCloseDeposit: (Deposit) -> Unit,
+    onSellInvestment: (InvestmentHolding, Double) -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    var closingDeposit by remember { mutableStateOf<Deposit?>(null) }
+    var sellingHolding by remember { mutableStateOf<InvestmentHolding?>(null) }
     var refreshing by remember { mutableStateOf(false) }
     var marketMessage by remember { mutableStateOf("Котировки MOEX с задержкой примерно 15 минут.") }
     val now = System.currentTimeMillis()
@@ -738,6 +765,9 @@ private fun CapitalScreen(
                     }
                     Text("Результат: ${if (profit >= 0) "+" else ""}${money(profit)}", color = if (profit >= 0) Green else Color(0xFFFF9A83), fontSize = 12.sp)
                     Text(if (item.priceUpdatedAtMillis > 0) "Котировка: ${date(item.priceUpdatedAtMillis)}" else "Нет котировки — показана цена покупки", color = Muted, fontSize = 10.sp)
+                    OutlinedButton(onClick = { sellingHolding = item }, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Outlined.TrendingDown, null); Spacer(Modifier.width(6.dp)); Text("Продать часть или всю позицию")
+                    }
                 }
             }
         }
@@ -759,6 +789,9 @@ private fun CapitalScreen(
                         Column(horizontalAlignment = Alignment.End) { Text("К концу срока", color = Muted, fontSize = 10.sp); Text(money(expected), color = Green, fontWeight = FontWeight.SemiBold) }
                     }
                     Text("Окончание: ${date(deposit.maturityAtMillis)}", color = Muted, fontSize = 10.sp)
+                    OutlinedButton(onClick = { closingDeposit = deposit }, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Outlined.AccountBalanceWallet, null); Spacer(Modifier.width(6.dp)); Text("Закрыть вклад и вернуть деньги")
+                    }
                 }
             }
         }
@@ -774,9 +807,69 @@ private fun CapitalScreen(
                 IconButton(onClick = { onDeleteTransfer(transfer) }) { Icon(Icons.Outlined.DeleteOutline, "Удалить перемещение", tint = Muted) }
             }
         }
-        Text("Перемещение меняет остаток наличных, но не является доходом или расходом. При частичном снятии или продаже отдельно скорректируй сумму вклада или количество бумаг.", color = Muted, fontSize = 10.sp)
-        Text("Проценты рассчитаны ориентировочно. Фактическая сумма зависит от правил банка и налогов.", color = Muted, fontSize = 10.sp)
+        Text("Перемещение меняет остаток наличных, но не является доходом или расходом.", color = Muted, fontSize = 10.sp)
+        Text("Проценты по вкладам и стоимость продажи без свежей котировки рассчитываются ориентировочно.", color = Muted, fontSize = 10.sp)
+        closingDeposit?.let { deposit ->
+            val accrued = depositInterestMinor(deposit, System.currentTimeMillis())
+            val returned = deposit.principalMinor + accrued
+            AlertDialog(
+                onDismissRequest = { closingDeposit = null },
+                title = { Text("Закрыть вклад?") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                        Text("${deposit.bank} · ${deposit.title}")
+                        Text("Основная сумма: ${money(deposit.principalMinor)}", color = Muted, fontSize = 12.sp)
+                        Text("Ориентировочные проценты: ${money(accrued)}", color = Muted, fontSize = 12.sp)
+                        Text("Будет возвращено в наличные: ${money(returned)}", fontWeight = FontWeight.Bold)
+                        Text("Фактическая сумма при досрочном закрытии может отличаться от расчёта приложения.", color = Muted, fontSize = 10.sp)
+                    }
+                },
+                confirmButton = { TextButton(onClick = { onCloseDeposit(deposit); closingDeposit = null }) { Text("Закрыть и вернуть") } },
+                dismissButton = { TextButton(onClick = { closingDeposit = null }) { Text("Отмена") } }
+            )
+        }
+        sellingHolding?.let { holding ->
+            val priceMinor = if (holding.currentPriceMinor > 0) holding.currentPriceMinor else holding.averageBuyPriceMinor
+            SellInvestmentDialog(
+                holding = holding,
+                priceMinor = priceMinor,
+                hasMarketQuote = holding.currentPriceMinor > 0,
+                onDismiss = { sellingHolding = null },
+                onSave = { quantity -> onSellInvestment(holding, quantity); sellingHolding = null }
+            )
+        }
     }
+}
+
+@Composable
+private fun SellInvestmentDialog(
+    holding: InvestmentHolding,
+    priceMinor: Long,
+    hasMarketQuote: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (Double) -> Unit
+) {
+    var quantityText by remember { mutableStateOf(holding.quantity.toString()) }
+    val quantity = quantityText.replace(',', '.').toDoubleOrNull()
+    val proceeds = quantity?.takeIf { it > 0 }?.let { (it * priceMinor).toLong() } ?: 0L
+    val valid = quantity != null && quantity > 0 && quantity <= holding.quantity && proceeds > 0
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Продажа ${holding.ticker}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Доступно бумаг / паёв: ${String.format(Locale("ru", "RU"), "%.4f", holding.quantity)}", color = Muted, fontSize = 11.sp)
+                Text("Цена за единицу: ${money(priceMinor)}", fontSize = 12.sp)
+                Text(if (hasMarketQuote) "Используется последняя сохранённая котировка MOEX." else "Котировки нет: используется средняя цена покупки.", color = Muted, fontSize = 10.sp)
+                OutlinedTextField(quantityText, { quantityText = it }, label = { Text("Количество для продажи") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+                Text("Ориентировочно поступит: ${money(proceeds)}", fontWeight = FontWeight.Bold)
+                if (quantity != null && quantity > holding.quantity)
+                    Text("Нельзя продать больше имеющегося количества.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+            }
+        },
+        confirmButton = { TextButton(enabled = valid, onClick = { onSave(quantity!!) }) { Text("Продать и вернуть деньги") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
 }
 
 @Composable
