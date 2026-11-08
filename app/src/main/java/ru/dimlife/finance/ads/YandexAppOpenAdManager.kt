@@ -3,10 +3,10 @@ package ru.dimlife.finance.ads
 import android.app.Activity
 import android.app.Application
 import android.os.Bundle
-import com.yandex.mobile.ads.appopen.AppOpenAd
-import com.yandex.mobile.ads.appopen.AppOpenAdEventListener
-import com.yandex.mobile.ads.appopen.AppOpenAdLoadListener
-import com.yandex.mobile.ads.appopen.AppOpenAdLoader
+import com.yandex.mobile.ads.appopenad.AppOpenAd
+import com.yandex.mobile.ads.appopenad.AppOpenAdEventListener
+import com.yandex.mobile.ads.appopenad.AppOpenAdLoadListener
+import com.yandex.mobile.ads.appopenad.AppOpenAdLoader
 import com.yandex.mobile.ads.common.AdError
 import com.yandex.mobile.ads.common.AdRequest
 import com.yandex.mobile.ads.common.AdRequestError
