@@ -14,7 +14,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 7
-        versionName = "0.7.0" // Payment calendar, reminders, compile fix
+        versionName = "0.7.0" // Payment calendar, reminders, final release workflow
     }
 
     signingConfigs {
