@@ -9,6 +9,8 @@ import android.os.Build
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -187,7 +189,7 @@ private fun DimLifeApp() {
                 Tab.ANALYTICS -> AnalyticsScreen(Modifier.padding(padding), income, expenses, transactions, budgets,
                     onDeleteBudget = { item -> scope.launch { dao.deleteBudget(item) } }
                 )
-                Tab.SETTINGS -> SettingsScreen(Modifier.padding(padding), darkTheme) { enabled ->
+                Tab.SETTINGS -> SettingsScreen(Modifier.padding(padding), darkTheme, dao) { enabled ->
                     scope.launch { context.financeDataStore.edit { preferences -> preferences[DARK_THEME_KEY] = enabled } }
                 }
             }
@@ -491,8 +493,13 @@ private fun AddBudgetDialog(onDismiss: () -> Unit, onSave: (String, Double) -> U
 }
 
 @Composable
-private fun SettingsScreen(modifier: Modifier, darkTheme: Boolean, onThemeChange: (Boolean) -> Unit) {
-    Column(modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+private fun SettingsScreen(
+    modifier: Modifier,
+    darkTheme: Boolean,
+    dao: ru.dimlife.finance.data.FinanceDao,
+    onThemeChange: (Boolean) -> Unit
+) {
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Настройки", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp)).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -501,10 +508,179 @@ private fun SettingsScreen(modifier: Modifier, darkTheme: Boolean, onThemeChange
             }
             Switch(checked = darkTheme, onCheckedChange = onThemeChange)
         }
+        BackupSection(dao)
         UpdateSection()
-        EmptyState("Данные хранятся на устройстве", "Регистрация и подключение к банку не требуются. Экспорт и резервное копирование добавим следующим этапом.")
-        Text("DimLife Finance · версия 0.5.0", color = Muted, fontSize = 11.sp)
+        EmptyState("Данные хранятся на устройстве", "Финансовая информация не отправляется на сервер и не требует подключения к банку.")
+        Text("DimLife Finance · версия 0.6.0", color = Muted, fontSize = 11.sp)
     }
+}
+
+@Composable
+private fun BackupSection(dao: ru.dimlife.finance.data.FinanceDao) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var pendingBackup by remember { mutableStateOf<String?>(null) }
+    var message by remember { mutableStateOf("Создай резервную копию перед переносом приложения на другой телефон.") }
+    var busy by remember { mutableStateOf(false) }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        val json = pendingBackup
+        if (uri != null && json != null) {
+            try {
+                context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(json) }
+                    ?: throw IOException("Не удалось открыть файл для записи")
+                message = "Резервная копия успешно сохранена."
+            } catch (error: Exception) {
+                message = error.message ?: "Не удалось сохранить резервную копию."
+            }
+        }
+        pendingBackup = null
+        busy = false
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                busy = true
+                try {
+                    val jsonText = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                            ?: throw IOException("Не удалось прочитать файл")
+                    }
+                    val backup = withContext(Dispatchers.Default) { parseFinanceBackup(jsonText) }
+                    dao.restoreBackup(backup.first, backup.second, backup.third)
+                    message = "Восстановлено: ${backup.first.size} операций, ${backup.second.size} подписок, ${backup.third.size} бюджетов. Старые данные заменены."
+                } catch (error: Exception) {
+                    message = error.message ?: "Не удалось восстановить резервную копию."
+                } finally {
+                    busy = false
+                }
+            }
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Резервное копирование", fontWeight = FontWeight.SemiBold)
+            Text("Экспортируй операции, подписки и бюджеты в JSON. Файл можно сохранить в облако или перенести на другой телефон.", color = Muted, fontSize = 12.sp)
+            Button(
+                onClick = {
+                    scope.launch {
+                        busy = true
+                        try {
+                            val transactions = dao.getAllTransactions()
+                            val subscriptions = dao.getAllSubscriptions()
+                            val budgets = dao.getAllBudgets()
+                            pendingBackup = createFinanceBackup(transactions, subscriptions, budgets)
+                            exportLauncher.launch("DimLife-Finance-backup-${SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())}.json")
+                        } catch (error: Exception) {
+                            message = error.message ?: "Не удалось подготовить резервную копию."
+                            busy = false
+                        }
+                    }
+                },
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Создать резервную копию") }
+            OutlinedButton(
+                onClick = { importLauncher.launch(arrayOf("application/json", "text/*")) },
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Восстановить из файла") }
+            Text(message, color = Muted, fontSize = 11.sp)
+            Text("Внимание: восстановление полностью заменяет текущие записи данными из файла.", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+        }
+    }
+}
+
+private fun createFinanceBackup(
+    transactions: List<FinanceTransaction>,
+    subscriptions: List<Subscription>,
+    budgets: List<CategoryBudget>
+): String {
+    val root = JSONObject()
+        .put("format", "dimlife-finance-backup")
+        .put("version", 1)
+        .put("createdAtMillis", System.currentTimeMillis())
+    root.put("transactions", JSONArray().apply {
+        transactions.forEach { item ->
+            put(JSONObject().put("id", item.id).put("title", item.title)
+                .put("amountMinor", item.amountMinor).put("type", item.type)
+                .put("category", item.category).put("dateMillis", item.dateMillis))
+        }
+    })
+    root.put("subscriptions", JSONArray().apply {
+        subscriptions.forEach { item ->
+            put(JSONObject().put("id", item.id).put("title", item.title)
+                .put("amountMinor", item.amountMinor).put("currency", item.currency)
+                .put("period", item.period).put("nextPaymentMillis", item.nextPaymentMillis)
+                .put("isActive", item.isActive))
+        }
+    })
+    root.put("budgets", JSONArray().apply {
+        budgets.forEach { item ->
+            put(JSONObject().put("id", item.id).put("category", item.category)
+                .put("limitMinor", item.limitMinor).put("monthKey", item.monthKey)
+                .put("createdAtMillis", item.createdAtMillis))
+        }
+    })
+    return root.toString(2)
+}
+
+private fun parseFinanceBackup(jsonText: String): Triple<List<FinanceTransaction>, List<Subscription>, List<CategoryBudget>> {
+    val root = JSONObject(jsonText)
+    if (root.optString("format") != "dimlife-finance-backup" || root.optInt("version") != 1) {
+        throw IOException("Файл не является резервной копией DimLife Finance или имеет неподдерживаемую версию.")
+    }
+    val transactionsJson = root.optJSONArray("transactions") ?: throw IOException("В резервной копии нет списка операций.")
+    val subscriptionsJson = root.optJSONArray("subscriptions") ?: throw IOException("В резервной копии нет списка подписок.")
+    val budgetsJson = root.optJSONArray("budgets") ?: throw IOException("В резервной копии нет списка бюджетов.")
+
+    val transactions = (0 until transactionsJson.length()).map { index ->
+        val item = transactionsJson.getJSONObject(index)
+        val type = item.getString("type")
+        if (type != "INCOME" && type != "EXPENSE") throw IOException("Некорректный тип операции.")
+        FinanceTransaction(
+            id = item.getLong("id"), title = item.getString("title"),
+            amountMinor = item.getLong("amountMinor"), type = type,
+            category = item.getString("category"), dateMillis = item.getLong("dateMillis")
+        )
+    }
+    val subscriptions = (0 until subscriptionsJson.length()).map { index ->
+        val item = subscriptionsJson.getJSONObject(index)
+        Subscription(
+            id = item.getLong("id"), title = item.getString("title"),
+            amountMinor = item.getLong("amountMinor"), currency = item.optString("currency", "RUB"),
+            period = item.optString("period", "MONTHLY"),
+            nextPaymentMillis = item.getLong("nextPaymentMillis"),
+            isActive = item.optBoolean("isActive", true)
+        )
+    }
+    val budgets = (0 until budgetsJson.length()).map { index ->
+        val item = budgetsJson.getJSONObject(index)
+        CategoryBudget(
+            id = item.getLong("id"), category = item.getString("category"),
+            limitMinor = item.getLong("limitMinor"), monthKey = item.getString("monthKey"),
+            createdAtMillis = item.optLong("createdAtMillis", System.currentTimeMillis())
+        )
+    }
+    if (transactions.size > 100000 || subscriptions.size > 10000 || budgets.size > 10000) {
+        throw IOException("В файле слишком много записей.")
+    }
+    if (transactions.any { it.title.isBlank() || it.amountMinor <= 0 } ||
+        subscriptions.any { it.title.isBlank() || it.amountMinor <= 0 } ||
+        budgets.any { it.category.isBlank() || it.limitMinor <= 0 }) {
+        throw IOException("В резервной копии обнаружены некорректные записи.")
+    }
+    return Triple(transactions, subscriptions, budgets)
 }
 
 private data class LatestRelease(
