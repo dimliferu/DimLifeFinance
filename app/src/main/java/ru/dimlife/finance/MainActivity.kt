@@ -77,12 +77,15 @@ private val PAYMENT_REMINDERS_KEY = booleanPreferencesKey("payment_reminders")
 
 class MainActivity : ComponentActivity() {
     private lateinit var yandexAppOpenAdManager: YandexAppOpenAdManager
+    private val yandexAdsInitialized = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        yandexAppOpenAdManager = YandexAppOpenAdManager(application)
+        yandexAppOpenAdManager = YandexAppOpenAdManager(application) {
+            yandexAdsInitialized.value = true
+        }
         yandexAppOpenAdManager.start()
-        setContent { DimLifeApp() }
+        setContent { DimLifeApp(yandexAdsInitialized.value) }
     }
 
     override fun onDestroy() {
@@ -97,7 +100,7 @@ private enum class Tab(val label: String) {
 }
 
 @Composable
-private fun DimLifeApp() {
+private fun DimLifeApp(adsInitialized: Boolean) {
     val context = LocalContext.current
     val dao = remember { FinanceDatabase.get(context).financeDao() }
     val transactions by dao.observeTransactions().collectAsStateWithLifecycle(initialValue = emptyList())
@@ -158,7 +161,7 @@ private fun DimLifeApp() {
             },
             bottomBar = {
                 Column {
-                    YandexBannerAd()
+                    if (adsInitialized) YandexBannerAd()
                     NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                     Tab.entries.forEach { tab ->
                         val icon = when (tab) {
